@@ -19,7 +19,7 @@
 ## 怎么开始
 
 ```bash
-git clone https://github.com/Luowen712/pet-dog.git
+git clone https://github.com/Luowen712/Pet-dog.git
 cd pet-dog
 ```
 
