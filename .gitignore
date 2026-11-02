@@ -1,31 +1,52 @@
-﻿# Java
-target/
-*.class
-*.jar
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-# Node
+# 数据库与运行产物
+*.db
+*.db-journal
+*.sqlite3
+*.log
+serial.log
+
+# Node / 前端
 node_modules/
 dist/
+dist-ssr/
 .env
 .env.local
+.env.*.local
 
 # Keil / 嵌入式编译产物
 firmware/**/Objects/
 firmware/**/Listings/
+firmware/**/DebugConfig/
 *.uvguix.*
+*.uvoptx
 *.hex
 *.bin
 *.axf
+*.map
+*.lst
 
-# 运行产物与日志
-*.log
-serial.log
+# 硬件工程缓存
+hardware/**/History/
+*.epro
 
 # IDE
 .idea/
 .vscode/
 *.iml
+*.code-workspace
 
 # 系统
 .DS_Store
 Thumbs.db
+desktop.ini
