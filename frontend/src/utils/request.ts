@@ -1,0 +1,86 @@
+import axios from 'axios'
+import type { AxiosRequestConfig } from 'axios'
+import { ElMessage } from 'element-plus'
+import type { ApiResponse } from '@/types'
+import { matchMock } from '@/mock'
+import { ApiError } from './errors'
+import { clearSession, getToken } from './session'
+
+const USE_MOCK = import.meta.env.VITE_USE_MOCK === 'true'
+
+export const http = axios.create({
+  baseURL: import.meta.env.VITE_API_BASE ?? '/api',
+  timeout: 10000,
+})
+
+http.interceptors.request.use((config) => {
+  const token = getToken()
+  if (token) config.headers.Authorization = `Bearer ${token}`
+  return config
+})
+
+let redirecting = false
+
+async function handleUnauthorized(): Promise<void> {
+  if (redirecting) return
+  redirecting = true
+  clearSession()
+  try {
+    const [{ default: router }, { useAuthStore }] = await Promise.all([
+      import('@/router'),
+      import('@/stores/auth'),
+    ])
+    useAuthStore().reset()
+    if (router.currentRoute.value.path !== '/login') {
+      ElMessage.warning('登录已过期，请重新登录')
+      await router.replace({
+        path: '/login',
+        query: { redirect: router.currentRoute.value.fullPath },
+      })
+    }
+  } finally {
+    window.setTimeout(() => {
+      redirecting = false
+    }, 800)
+  }
+}
+
+/**
+ * 统一请求入口：
+ * 1. Mock 开启时先走内置假后端（后端未启动也能把页面跑起来）
+ * 2. 拆掉 { code, message, data } 外壳，页面直接拿 data
+ * 3. 401 清登录态跳登录页，其余错误统一 toast
+ */
+export async function request<T>(config: AxiosRequestConfig): Promise<T> {
+  try {
+    if (USE_MOCK) {
+      const mocked = await matchMock(config)
+      if (mocked.matched) return mocked.data as T
+    }
+
+    const response = await http.request<ApiResponse<T>>(config)
+    const body = response.data
+    if (body && typeof body === 'object' && typeof body.code === 'number') {
+      if (body.code !== 0) throw new ApiError(body.code, body.message || '请求失败')
+      return body.data
+    }
+    return body as unknown as T
+  } catch (error) {
+    if (error instanceof ApiError) {
+      ElMessage.error(error.message)
+      throw error
+    }
+    if (axios.isAxiosError(error)) {
+      const status = error.response?.status
+      if (status === 401) {
+        await handleUnauthorized()
+        throw new ApiError(40101, '登录已过期')
+      }
+      const message = status ? `请求失败（HTTP ${status}）` : '网络异常，请检查后端服务是否已启动'
+      ElMessage.error(message)
+      throw new ApiError(status ?? -1, message)
+    }
+    ElMessage.error('请求失败')
+    throw error
+  }
+}
