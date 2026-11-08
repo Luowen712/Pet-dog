@@ -1,0 +1,808 @@
+openapi: 3.0.3
+info:
+  title: 桌面宠物 后端接口契约
+  version: "1.0.0"
+  description: |
+    后端与前端的唯一接口依据。本文件与 `frame.md`（串口帧）、`events.md`（WebSocket 事件）、
+    `error-codes.md`（错误码）、`action-timing.md`（时序常量）配套使用。
+
+    ## 与现有代码的差异（必须先看）
+    本契约与 `backend/app/routers/auth.py` 的现有实现**一致**（HTTP 200 + 业务 code）；
+    与 `frontend/src/api/command.ts`、`frontend/src/utils/ws.ts`、`frontend/src/stores/pet.ts`
+    的现有实现**不一致**，差异逐条列在 `§差异清单` 标签下。
+
+    ## 统一返回体（所有 HTTP 接口）
+    一律 `{ code, message, data, timestamp }`。`code === 0` 表示成功。
+    业务错误**也返回 HTTP 200**，用非零 code 表达——沿用 `auth.py` 已有做法，
+    因为前端 `utils/request.ts` 已经把「HTTP 200 + code !== 0」作为唯一的业务错误通道。
+    只有两类例外使用真实 HTTP 状态码：`401`（token 无效或过期，前端据此跳登录页）
+    与 `422`（请求体无法解析成声明的 schema，FastAPI 默认行为，前端只当网络错误处理）。
+tags:
+  - name: auth
+    description: 认证
+  - name: devices
+    description: 设备与状态
+  - name: commands
+    description: 命令下发与查询
+  - name: events
+    description: WebSocket 通道
+  - name: faces
+    description: 表情资源
+  - name: scenes
+    description: 场景
+  - name: misc
+    description: 日志、遥测、天气、音乐
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    Envelope:
+      type: object
+      description: 统一返回体外壳。所有 data 字段的 schema 见各接口。
+      required: [code, message, timestamp]
+      properties:
+        code:
+          type: integer
+          description: 0 表示成功；非 0 见 error-codes.md
+          example: 0
+        message:
+          type: string
+          example: ok
+        data:
+          nullable: true
+          description: 成功时为业务数据，失败时为 null
+        timestamp:
+          type: integer
+          format: int64
+          description: 服务端毫秒时间戳
+          example: 1762500000000
+
+    ErrorResponse:
+      allOf:
+        - $ref: '#/components/schemas/Envelope'
+        - type: object
+          properties:
+            code:
+              type: integer
+              example: 40002
+            message:
+              type: string
+              example: 动作码不合法
+            data:
+              nullable: true
+              example: null
+
+    # ---------- 命令 ----------
+    CommandStatus:
+      type: string
+      description: |
+        业务状态。只由后端判定，前端**只显示不判定**。
+        超时由后端置 unknown，前端不得自行计时（见 §差异清单 D3）。
+      enum: [pending, accepted, done, rejected, unknown, superseded]
+
+    TransportStatus:
+      type: string
+      description: |
+        串口写入结果，与 CommandStatus 正交。
+        write_failed 表示确定一个字节都没发出去；partial_write 表示发了一部分、结果不明。
+      enum: [ok, write_failed, partial_write]
+
+    CommandReceipt:
+      type: object
+      description: 命令回执。这是前端的唯一命令事实来源。
+      required: [cmdId, deviceId, action, status, transport, createdAt, updatedAt]
+      properties:
+        cmdId:
+          type: string
+          format: uuid
+          description: 前端生成、随 Idempotency-Key 传入，全局唯一
+          example: 6f1f2c1e-8d1a-4c3b-9e77-0a1b2c3d4e5f
+        deviceId:
+          type: integer
+          example: 1
+        action:
+          type: integer
+          description: 动作码，见 frame.md §6
+          example: 67
+        seq:
+          type: integer
+          nullable: true
+          minimum: 1
+          maximum: 255
+          description: 后端分配的串口序号。写失败时可能为 null。前端**不得**用 seq 做命令主键。
+          example: 7
+        status:
+          $ref: '#/components/schemas/CommandStatus'
+        transport:
+          $ref: '#/components/schemas/TransportStatus'
+        errorCode:
+          type: integer
+          nullable: true
+          description: 仅当 status=rejected 时有值，见 frame.md 错误码
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    SendCommandRequest:
+      type: object
+      required: [deviceId, action]
+      properties:
+        deviceId:
+          type: integer
+          example: 1
+        action:
+          type: integer
+          description: 动作码，必须是 frame.md §6 的 21 个之一
+          example: 67
+        idempotencyKey:
+          type: string
+          format: uuid
+          deprecated: true
+          description: |
+            **不要用这个字段。** 幂等键必须放在 HTTP 头 `Idempotency-Key` 里，
+            因为这个体字段本身无法在「请求体解析失败」时保留下幂等语义。
+            保留定义仅为兼容，后端应忽略它。
+
+    # ---------- 设备 ----------
+    Device:
+      type: object
+      required: [id, name, online, firmware]
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        online:
+          type: boolean
+          description: 由「9 秒内是否收到过任何有效上行帧」判定，见 frame.md §8.2
+        firmware:
+          type: string
+        lastFrameAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: |
+            最近一次收到**有效上行帧**的时刻（不是心跳成功时刻，也不是串口打开时刻）。
+            前端现有的 `last_heartbeat` 字段按此改名——两者语义不同：
+            `last_heartbeat` 暗示「心跳有没有回」，而这里记的是「任何有效帧」。
+        battery:
+          type: integer
+          nullable: true
+          minimum: 0
+          maximum: 100
+
+    DeviceSnapshot:
+      type: object
+      description: |
+        设备状态快照。**WS 断线重连后必须调用本接口 + `GET /api/commands/active` 对账**，
+        不能只等新事件——断线期间产生的终态 ack 已经丢了。
+      required: [deviceId, updatedAt]
+      properties:
+        deviceId:
+          type: integer
+        online:
+          type: boolean
+        battery:
+          type: integer
+          nullable: true
+        voltageMv:
+          type: integer
+          nullable: true
+        action:
+          type: integer
+          nullable: true
+          description: 设备当前执行的动作码，不是「最后一次下发的动作」
+        expression:
+          type: integer
+          nullable: true
+        musicState:
+          type: integer
+          nullable: true
+        track:
+          type: integer
+          nullable: true
+        weatherCode:
+          type: integer
+          nullable: true
+        temperatureC:
+          type: integer
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+          description: 最后一次成功解析上行帧的时间
+
+    # ---------- 认证 ----------
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+          format: password
+
+    User:
+      type: object
+      required: [username, name, role]
+      properties:
+        username:
+          type: string
+        name:
+          type: string
+        role:
+          type: string
+          enum: [user, admin]
+
+    # ---------- WS ----------
+    WsTicket:
+      type: object
+      required: [ticket, expiresInSec]
+      properties:
+        ticket:
+          type: string
+          description: 一次性票据，30 秒有效，绑定 userId + deviceId，用完即焚
+        expiresInSec:
+          type: integer
+          example: 30
+
+  responses:
+    Ok:
+      description: 成功。data 的形状见各接口。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Envelope'
+    Unauthorized:
+      description: token 缺失/无效/过期。前端据此跳登录页。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+paths:
+  /api/auth/login:
+    post:
+      tags: [auth]
+      summary: 登录
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: |
+            成功时 data = { token, user }。
+            **失败也返回 HTTP 200**，code = 40001（用户名或密码错误）。
+            前端不得靠 HTTP 状态码判断登录失败。
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          token:
+                            type: string
+                          user:
+                            $ref: '#/components/schemas/User'
+
+  /api/auth/me:
+    get:
+      tags: [auth]
+      summary: 当前用户
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          $ref: '#/components/responses/Ok'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/devices:
+    get:
+      tags: [devices]
+      summary: 设备列表
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: data = Device[]
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Device'
+
+  /api/devices/{deviceId}/status:
+    get:
+      tags: [devices]
+      summary: 设备状态快照
+      description: |
+        WS 重连对账必须调用本接口。不要把它当成「WS 断了就轮询」的轮询接口——
+        正常运行时状态只走 WS，本接口只在连接建立时调一次。
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: deviceId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: data = DeviceSnapshot。设备不存在时 code=40400 且 data=null。
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/DeviceSnapshot'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/commands/send:
+    post:
+      tags: [commands]
+      summary: 下发动作命令
+      description: |
+        ## 幂等
+        `Idempotency-Key` 请求头必填，值为前端生成的 UUID，与返回的 `cmdId` 相同。
+        后端先按 (device_id, msg_id) 查重：命中且请求体一致 → 直接返回原回执（**不再分配新 seq、不再写串口**）；
+        命中但请求体不同 → code=40901。
+        这条规则让「网络超时后重试」变安全，也是日志去重的依据。
+
+        ## 响应语义
+        HTTP 200 + code=0 只表示**命令已落库**，绝不表示设备收到。
+        status 一律为 `pending`（写失败则为 `unknown` + transport=`write_failed`）。
+        真正的结果只能通过 `GET /api/commands/{cmdId}` 或 WS `command` 事件获得。
+
+        ## 为什么不用 202
+        本仓库所有接口统一 `{code,message,data}` 外壳，业务结果只走 code。
+        混用 202/409 会让前端 `utils/request.ts` 把 409 当成网络错误，
+        丢掉后端写的具体 message。所以 409 语义用 code=40901 表达。
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: 必填。缺失 → code=40002（不落库、不分配 seq、不写串口）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendCommandRequest'
+      responses:
+        '200':
+          description: |
+            data = CommandReceipt。
+            - code=0 且 status=pending：已落库并进入串口写队列
+            - code=0 且 status=unknown + transport=write_failed：落库了但确定没发出去
+            - code=40901：同一 Idempotency-Key 对应不同请求体
+            - code=40002：动作码不在 21 个之内 / deviceId 缺失
+            - code=40400：设备不存在
+            - code=50301：设备 offline（**仅告警，仍会入队**；前端提示「设备可能不在线」但不要阻止用户点击）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/CommandReceipt'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/commands/{cmdId}:
+    get:
+      tags: [commands]
+      summary: 查询单条命令回执
+      description: 前端在 WS 断线、或页面刷新后用它补齐状态。有 WS 时不需要轮询。
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: cmdId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: data = CommandReceipt；不存在时 code=40400、data=null
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/CommandReceipt'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/commands/active:
+    get:
+      tags: [commands]
+      summary: 某设备当前未终结的命令
+      description: |
+        WS 重连对账用：只返回 status ∈ {pending, accepted} 的命令。
+        前端拿到后应把它们放回 pending 表，避免按钮永久转圈。
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: deviceId
+          in: query
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: data = CommandReceipt[]
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/CommandReceipt'
+
+  /api/events/ticket:
+    post:
+      tags: [events]
+      summary: 换取 WebSocket 一次性票据
+      description: |
+        ## 为什么需要它
+        浏览器的 WebSocket 构造函数**不能**设置自定义请求头，所以没法带 `Authorization: Bearer`。
+        现在的实现把长期 JWT 放在 URL 查询参数里（`/ws/device?token=<JWT>`），
+        URL 会进 access log、代理日志、浏览器历史——等于长期凭证泄漏。
+
+        改为：先用带 Bearer 头的 HTTP 请求换一张 30 秒有效、一次性、绑定 (userId, deviceId) 的票据，
+        再用 `/ws/device?ticket=<ticket>` 建连。票据用过即作废，重连必须重新换。
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [deviceId]
+              properties:
+                deviceId:
+                  type: integer
+      responses:
+        '200':
+          description: data = WsTicket
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/WsTicket'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /ws/device:
+    get:
+      tags: [events]
+      summary: WebSocket 事件通道（协议见 events.md）
+      description: |
+        建连：`GET /ws/device?deviceId=<id>&ticket=<ticket>`
+        - ticket 无效/过期/已用过 → 立即 4003 关闭，不升级连接
+        - 建连成功后服务端先推一帧 `snapshot`，再推实时事件
+        事件格式与语义见 `events.md`。**注意路径不带 /api 前缀**，与现有实现一致。
+      parameters:
+        - name: deviceId
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: ticket
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '101':
+          description: 协议升级成功
+
+  /api/logs:
+    get:
+      tags: [misc]
+      summary: 命令日志分页
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: size
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: status
+          in: query
+          schema:
+            type: string
+            description: 按 CommandStatus 过滤，多个用逗号分隔
+      responses:
+        '200':
+          description: "data = { items: CommandLog[], total, page, size }"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Envelope'
+
+  /api/telemetry:
+    get:
+      tags: [misc]
+      summary: 遥测采样序列
+      description: |
+        只保留「有明确查询需求」的采样，见 frame.md。**不存每一帧遥测**——
+        按 1 Hz 采样一天就是 86400 行，课程项目撑不住，也没有查询场景。
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: deviceId
+          in: query
+          schema:
+            type: integer
+        - name: minutes
+          in: query
+          description: 最近多少分钟，默认 60，上限 1440
+          schema:
+            type: integer
+            default: 60
+            maximum: 1440
+      responses:
+        '200':
+          description: data = TelemetryPoint[]
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Envelope'
+
+  /api/weather:
+    get:
+      tags: [misc]
+      summary: 当前天气（供前端展示与 0x09 下发）
+      description: |
+        服务端缓存 10 分钟。天气只影响展示和设备表情，**不影响命令链路**；
+        Open-Meteo 挂了也必须能下发动作命令。
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: data = { code, text, temp, updatedAt }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Envelope'
+
+  /api/devices/{deviceId}/music:
+    post:
+      tags: [misc]
+      summary: 音乐控制
+      description: |
+        走 `0x0A` 帧，**没有 seq、只有弱确认 0x8A**。
+        所以本接口不返回 cmdId，也无法跟踪执行结果。
+        前端只能在下一次 `music` 事件（来源 0x0B）到达时更新 UI。
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: deviceId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subcommand]
+              properties:
+                subcommand:
+                  type: integer
+                  enum: [0, 1, 2]
+                  description: 0 停止 / 1 播放 / 2 暂停
+                parameter:
+                  type: integer
+                  description: 曲目号，0..255
+      responses:
+        '200':
+          description: "data = { dispatched: true }，不代表设备收到"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Envelope'
+
+  /api/faces:
+    get:
+      tags: [faces]
+      summary: 表情列表
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: data = FaceItem[]
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Envelope'
+    post:
+      tags: [faces]
+      summary: 上传表情（必须正好 512 字节）
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, name]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                name:
+                  type: string
+      responses:
+        '200':
+          description: 成功 data = FaceItem；大小不符 code=40002
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Envelope'
+
+  /api/faces/current:
+    put:
+      tags: [faces]
+      summary: 切换当前表情
+      description: 下发 `0x07`，无任何确认。接口返回成功**只代表字节已入队**。
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [face]
+              properties:
+                face:
+                  type: integer
+                  minimum: 0
+                  maximum: 6
+      responses:
+        '200':
+          description: data = { face }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Envelope'
+
+  /api/scenes:
+    get:
+      tags: [scenes]
+      summary: 场景列表
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: data = Scene[]
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Envelope'
+    post:
+      tags: [scenes]
+      summary: 新建场景
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, steps]
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                steps:
+                  type: array
+                  items:
+                    type: object
+                    required: [action]
+                    properties:
+                      action:
+                        type: integer
+      responses:
+        '200':
+          description: data = Scene
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Envelope'
+
+  /api/scenes/{sceneId}/run:
+    post:
+      tags: [scenes]
+      summary: 执行场景
+      description: |
+        ## 关键约束
+        场景执行**复用同一套命令链路**，不另开串口通道：逐条走 `/commands/send` 的同一队列，
+        每步等前一步终态（done/rejected/unknown）再发下一步。
+
+        ## 第一阶段不支持
+        - 断点恢复：进程重启后场景执行中止，不自动续跑
+        - 并发执行：同一设备同时只允许一个场景在跑，重复触发 code=40901
+        - 步骤重试：某步 unknown 时整个场景以 `aborted` 结束，不重试（重试会重复动作）
+
+        返回 `runId`，进度通过 WS `scene` 事件推送。
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sceneId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: data = { runId, totalSteps }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Envelope'
