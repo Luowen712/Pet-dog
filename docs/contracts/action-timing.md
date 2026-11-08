@@ -56,8 +56,8 @@
 | `0x43` | 打招呼 | blocking | 5 | **1600** | 已测量（fw.txt:667 五步 hold_ms 之和） |
 | `0x44` | 开灯 | led | 1 | `null` | 不适用 |
 | `0x45` | 关灯 | led | 1 | `null` | 不适用 |
-| `0x46` | 开呼吸灯 | led | 1 | `null` | 不适用 |
-| `0x47` | 关呼吸灯 | led | 1 | `null` | 不适用 |
+| `0x46` | 开呼吸灯 | led | 1 | `null` | 不适用（协议保留，接口层暂不开放，见 http-api.md §5.1） |
+| `0x47` | 关呼吸灯 | led | 1 | `null` | 不适用（协议保留，接口层暂不开放，见 http-api.md §5.1） |
 | `0x48` | 伸懒腰 | blocking | ? | `null` | **未测量** |
 | `0x49` | 后腿拉伸 | blocking | ? | `null` | **未测量** |
 
@@ -79,6 +79,10 @@ T_done = max_duration_ms + 600 ms                仅当 class=blocking 且 max_d
 | `class=blocking` 且未测量 | 不装 `T_done`，只装安全网 `T_DONE_HARD_CAP_MS = 30000` | `unknown` + 记一条 `contract_gap` 日志 |
 | `class=led` | 只装 `T_ack`，收到 `0x81` 直接 `done` | `unknown` |
 | `class=trigger` | 不装任何计时器 | 无记录 |
+
+> `T_ACK_MS = 600 ms` 是**后端**判定「设备没受理」的唯一依据，与前端按钮 3 秒变红的展示反馈
+> **无关**。前端不得自判超时，也不得把 3 秒写进任何契约性代码路径——那只是「让用户看到按钮还在转」
+> 的乐观 UI，命令结论一律看 `command_log`。
 
 **安全网不是测量值。** `T_DONE_HARD_CAP_MS=30000` 的唯一目的是让「固件崩了、`0x02` 永远不来」的命令最终能收敛，而不是替任何动作背书。
 每次它触发，都要打一条 `contract_gap action=0x??` 日志——那是「该动作还没测时长」的提醒，不是故障。
