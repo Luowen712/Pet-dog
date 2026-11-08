@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import WeatherIcon from './WeatherIcon.vue'
-import { weatherMeta } from '@/constants/weather'
+import { WEATHER_LOCATION, weatherMeta } from '@/constants/weather'
 import { formatClock, formatDateLabel, formatShortTime } from '@/utils/format'
 import { usePetStore } from '@/stores/pet'
 
@@ -30,6 +30,10 @@ const tempText = computed(() =>
 const updatedText = computed(() =>
   pet.weather?.updated_at ? `UPD ${formatShortTime(pet.weather.updated_at)}` : 'AWAITING FEED',
 )
+const locationText = computed(() => pet.weather?.location ?? WEATHER_LOCATION.name)
+const sourceText = computed(() =>
+  pet.weather?.source ? `数据源 ${pet.weather.source}` : '',
+)
 </script>
 
 <template>
@@ -45,11 +49,12 @@ const updatedText = computed(() =>
         <div class="date mono">{{ dateLabel }}</div>
       </div>
 
-      <div class="weather">
+      <div class="weather" :title="sourceText">
         <WeatherIcon :code="pet.weather?.code ?? 9" :size="34" />
         <div class="weather-text">
           <div class="temp mono">{{ tempText }}<span class="unit">℃</span></div>
           <div class="desc mono">{{ meta.text }}</div>
+          <div class="loc mono">{{ locationText }}</div>
         </div>
       </div>
     </div>
@@ -127,5 +132,16 @@ const updatedText = computed(() =>
   font-size: 9px;
   letter-spacing: 0.1em;
   color: var(--dim);
+}
+
+.loc {
+  margin-top: 1px;
+  max-width: 126px;
+  overflow: hidden;
+  font-size: 8px;
+  letter-spacing: 0.04em;
+  color: var(--faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

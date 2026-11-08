@@ -1,0 +1,1232 @@
+openapi: 3.0.3
+
+info:
+  title: Pet-dog 桌宠控制台 API
+  version: 1.1.0
+  description: |
+    STM32 智能桌面宠物的前后端接口契约 V1.1（PET-API-V1.1）。
+
+    本文件由前端已完成代码反向导出，字段名与路径均为冻结状态。
+    人读版说明见 `docs/STM32智能桌面宠物_前后端接口契约_V1.1.md`。
+
+    V1.1 新增：注册 `POST /api/auth/register`、设备改名 `PATCH /api/devices/{id}`；
+    `WeatherInfo` 增加可选的 `location` / `source`；明确表情 `preview` 必须可匿名 GET。
+
+    ## 三条必须遵守的约定
+
+    1. 所有 HTTP 接口都在 `/api` 前缀下，统一返回 `{code, message, data, timestamp}`，
+       `code = 0` 表示成功。
+    2. 业务失败用 HTTP 200 + 非 0 `code`（前端直接弹 `message`）；
+       只有登录态失效才用 HTTP 401 + `code: 40101`（前端据此清登录态跳登录页）。
+    3. `POST /api/commands/send` 必须立即返回，不能等设备应答；
+       设备应答通过 WebSocket 的 `ack` 事件回推，且必须晚于 HTTP 响应。
+
+    ## WebSocket
+
+    `ws://127.0.0.1:8000/ws/device?token=<urlencode>&device_id=1`
+    服务端单向推送纯文本 JSON 帧，一条消息一个事件：
+
+    ```json
+    {"event": "state",   "data": {"battery": 78, "voltage": 3.92, "action": 51,
+                                  "face": 0, "music_state": 0, "track": 3,
+                                  "weather_code": 0, "temp": 23}}
+    {"event": "ack",     "data": {"seq": 17, "status": "OK", "cost_ms": 312}}
+    {"event": "link",    "data": {"online": true}}
+    {"event": "music",   "data": {"state": 1, "track": 3, "volume": 15}}
+    {"event": "weather", "data": {"code": 0, "text": "晴", "temp": 23}}
+    ```
+
+    鉴权失败直接 `close(code=4001)`。前端不会给服务端发任何消息，也没有客户端心跳。
+
+    ## 业务错误怎么读
+
+    业务失败是 HTTP **200** + 非 0 `code`，不是 4xx。所以本文件每个操作只把 HTTP 层的
+    `401` 列成具名响应，其余业务错误放在 `x-business-errors` 扩展里（`default` 指向
+    通用错误体）。完整错误码表见契约文档第 7 章。
+
+    `message` 是给用户看的中文，前端原样弹出，不要写英文堆栈。
+
+servers:
+  - url: http://127.0.0.1:8000
+    description: 本地后端（前端 dev 时经 Vite 代理 /api 与 /ws）
+
+tags:
+  - name: 系统
+  - name: 认证
+  - name: 设备
+  - name: 指令
+  - name: 表情
+  - name: 日志与遥测
+  - name: 场景
+
+security:
+  - bearerAuth: []
+
+paths:
+  /api/health:
+    get:
+      tags: [系统]
+      summary: 健康检查
+      description: 前端不调用，联调自检用。
+      security: []
+      responses:
+        '200':
+          description: 服务正常
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          status: { type: string, example: ok }
+                          mode: { type: string, example: serial }
+              example:
+                code: 0
+                message: ok
+                data: { status: ok, mode: serial }
+                timestamp: 1762587000000
+
+  /api/auth/login:
+    post:
+      tags: [认证]
+      summary: 登录换取 token
+      description: 前端：`src/api/auth.ts → login()`。密码错返回 HTTP 200 + code 40001。
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string, example: admin }
+                password: { type: string, example: '123456', format: password }
+      responses:
+        '200':
+          description: 登录成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/LoginResult' }
+              example:
+                code: 0
+                message: ok
+                data:
+                  token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.example
+                  user: { username: admin, name: 管理员, role: admin }
+                timestamp: 1762587000000
+        default:
+          $ref: '#/components/responses/BusinessError'
+        x-business-errors:
+          - { code: 40001, message: 用户名或密码错误 }
+
+  /api/auth/register:
+    post:
+      tags: [认证]
+      summary: 注册账号
+      description: |
+        前端：`src/api/auth.ts → register()`，登录页「注册」。
+        只建账号，不签发 token；前端注册成功后切回登录页，用新账号登录。
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterRequest' }
+      responses:
+        '200':
+          description: 注册成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/RegisterResult' }
+              example:
+                code: 0
+                message: ok
+                data: { username: tester01, name: tester01 }
+                timestamp: 1762587000000
+        default:
+          $ref: '#/components/responses/BusinessError'
+        x-business-errors:
+          - { code: 40002, message: 用户名需 3–20 位字母、数字、下划线或中文 }
+          - { code: 40002, message: 密码至少 6 位 }
+          - { code: 40900, message: 用户名已存在 }
+
+  /api/auth/me:
+    get:
+      tags: [认证]
+      summary: 当前登录用户
+      description: 前端：`src/api/auth.ts → fetchMe()`。
+      responses:
+        '200':
+          description: 当前用户
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/User' }
+              example:
+                code: 0
+                message: ok
+                data: { username: admin, name: 管理员, role: admin }
+                timestamp: 1762587000000
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/devices:
+    get:
+      tags: [设备]
+      summary: 设备列表
+      description: |
+        前端：`src/api/device.ts → listDevices()`。
+        直接返回数组，不是分页对象。必须至少含一台 id=1 的设备（前端默认选它）。
+      responses:
+        '200':
+          description: 设备数组
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Device' }
+              example:
+                code: 0
+                message: ok
+                data:
+                  - id: 1
+                    name: 桌宠一号 · 小灰
+                    online: true
+                    firmware: v2.0.0
+                    last_heartbeat: '2026-11-08T15:29:52+08:00'
+                    battery: 78
+                    location: 书桌
+                  - id: 2
+                    name: 桌宠二号 · 小白
+                    online: false
+                    firmware: v1.9.3
+                    last_heartbeat: '2026-11-08T13:30:00+08:00'
+                    battery: 41
+                    location: 客厅
+                timestamp: 1762587000000
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/devices/{id}:
+    get:
+      tags: [设备]
+      summary: 单台设备
+      description: 前端：`src/api/device.ts → getDevice()`。
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '200':
+          description: 设备
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Device' }
+              example:
+                code: 0
+                message: ok
+                data:
+                  id: 1
+                  name: 桌宠一号 · 小灰
+                  online: true
+                  firmware: v2.0.0
+                  last_heartbeat: '2026-11-08T15:29:52+08:00'
+                  battery: 78
+                  location: 书桌
+                timestamp: 1762587000000
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+    patch:
+      tags: [设备]
+      summary: 修改桌宠名字
+      description: |
+        前端：`src/api/device.ts → renameDevice()`，设备页名字后的铅笔按钮。
+        只改显示名，不动连接参数；返回修改后的完整 Device。
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DeviceRename' }
+      responses:
+        '200':
+          description: 修改成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Device' }
+              example:
+                code: 0
+                message: ok
+                data:
+                  id: 1
+                  name: 小灰灰
+                  online: true
+                  firmware: v2.0.0
+                  last_heartbeat: '2026-11-08T15:29:52+08:00'
+                  battery: 78
+                  location: 书桌
+                timestamp: 1762587000000
+        default:
+          $ref: '#/components/responses/BusinessError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        x-business-errors:
+          - { code: 40002, message: 名字需要 1–20 个字符 }
+          - { code: 40400, message: 设备不存在 }
+
+  /api/devices/{id}/status:
+    get:
+      tags: [设备]
+      summary: 设备状态快照
+      description: |
+        前端：`src/api/device.ts → getDeviceStatus()`，进监控台时拉一次，之后靠 WS `state` 增量更新。
+        必须返回后端缓存的实时值（来源：设备每 5 秒上报的 0x03），不要在请求里同步查串口。
+        11 个字段一个都不能少，前端直接赋给 store 渲染。
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '200':
+          description: 状态快照
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/DeviceStatus' }
+              example:
+                code: 0
+                message: ok
+                data:
+                  device_id: 1
+                  battery: 78
+                  voltage: 3.92
+                  action: 49
+                  face: 0
+                  music_state: 0
+                  track: 3
+                  volume: 15
+                  weather_code: 0
+                  temp: 23
+                  updated_at: '2026-11-08T15:30:00+08:00'
+                timestamp: 1762587000000
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/devices/{id}/music:
+    post:
+      tags: [设备]
+      summary: 音乐控制
+      description: |
+        前端：`src/api/music.ts → sendMusic()`。响应体前端不读，但执行完必须推 WS `music` 事件，
+        否则音量条和播放状态不会更新。曲目号需自行回绕，避免 0 或超出曲库。
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MusicRequest' }
+      responses:
+        '200':
+          description: 已下发
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/MusicResult' }
+              example:
+                code: 0
+                message: ok
+                data: { ok: true, state: 1, track: 3, volume: 20 }
+                timestamp: 1762587000000
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/commands/send:
+    post:
+      tags: [指令]
+      summary: 下发一个动作
+      description: |
+        前端：`src/api/command.ts → sendCommand()`，监控台 19 个动作按钮与场景执行都走这里。
+
+        ### 时序硬要求
+        - **立即返回**（<300ms），不能等设备 ack；前端拿到 seq 后自己起 3 秒计时器。
+        - 必须**先返回 HTTP 响应，再推 WS `ack`**：前端是在 `await sendCommand()` 之后才把
+          `pending[seq]` 登记上，ack 早到会被当成迟到消息丢弃，按钮会误标红。
+        - `seq` 在 1-250 循环，同一时刻不能有两个在用的 seq（前端用 seq 做配对键）。
+
+        ### 其它
+        - 没有 `device_id` 字段是故意的：单串口链路，后端按当前唯一设备（id=1）处理。
+        - 无论设备是否应答，都要写 `command_log`：受理时 PENDING，之后更新为
+          OK / TIMEOUT(3s) / ERROR。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CommandRequest' }
+      responses:
+        '200':
+          description: 已受理
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CommandAccepted' }
+              example:
+                code: 0
+                message: ok
+                data: { seq: 17, action: 51, accepted: true }
+                timestamp: 1762587000000
+        default:
+          $ref: '#/components/responses/BusinessError'
+        x-business-errors:
+          - { code: 40002, message: 业务校验失败，message 直接展示给用户 }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/faces:
+    get:
+      tags: [表情]
+      summary: 表情列表
+      description: |
+        前端：`src/api/face.ts → listFaces()`。id 0-6 为内置（与固件编号一致），自定义从 100 起。
+        内置表情前端自己画 SVG，`preview` 会被忽略。
+      responses:
+        '200':
+          description: 表情数组
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/FaceItem' }
+              example:
+                code: 0
+                message: ok
+                data:
+                  - { id: 0, name: 普通, builtin: true }
+                  - { id: 1, name: 开心, builtin: true }
+                  - { id: 2, name: 困倦, builtin: true }
+                  - { id: 3, name: 生气, builtin: true }
+                  - { id: 4, name: 惊讶, builtin: true }
+                  - { id: 5, name: 伤心, builtin: true }
+                  - { id: 6, name: 卖萌, builtin: true }
+                  - { id: 101, name: 我的狗, builtin: false, preview: /api/faces/101/preview }
+                timestamp: 1762587000000
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [表情]
+      summary: 上传自定义表情
+      description: |
+        前端：`src/api/face.ts → uploadFace(file)`。multipart 字段名必须是 `file`。
+
+        硬约束：文件必须**正好 512 字节**，128×32 单色位图。前端已拦一道，后端必须再校验并
+        返回中文 message（前端原样弹出）。
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: 512 字节的 128×32 单色位图
+      responses:
+        '200':
+          description: 上传成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/FaceItem' }
+              example:
+                code: 0
+                message: ok
+                data: { id: 101, name: 我的狗, builtin: false, preview: /api/faces/101/preview }
+                timestamp: 1762587000000
+        default:
+          $ref: '#/components/responses/BusinessError'
+        x-business-errors:
+          - { code: 40002, message: 业务校验失败，message 直接展示给用户 }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/faces/current:
+    post:
+      tags: [表情]
+      summary: 切换当前表情
+      description: |
+        前端：`src/api/face.ts → setCurrentFace()`。
+
+        **这是切表情的唯一入口**，不要设计成走 `/api/commands/send` 带 action 字段。
+        后端收到后下发串口 0x07，并推 WS `state` 事件（face 字段变化）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [face]
+              properties:
+                face: { type: integer, description: 已存在的表情 id, example: 3 }
+      responses:
+        '200':
+          description: 已切换
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          face: { type: integer, example: 3 }
+              example:
+                code: 0
+                message: ok
+                data: { face: 3 }
+                timestamp: 1762587000000
+        default:
+          $ref: '#/components/responses/BusinessError'
+        x-business-errors:
+          - { code: 40400, message: 资源不存在 }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/faces/{id}:
+    delete:
+      tags: [表情]
+      summary: 删除自定义表情
+      description: 前端：`src/api/face.ts → deleteFace()`。内置表情不可删。
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: 表情 id
+          schema: { type: integer, example: 101 }
+      responses:
+        '200':
+          description: 已删除
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/OkResult' }
+              example:
+                code: 0
+                message: ok
+                data: { ok: true }
+                timestamp: 1762587000000
+        default:
+          $ref: '#/components/responses/BusinessError'
+        x-business-errors:
+          - { code: 40002, message: 内置表情不能删除 }
+          - { code: 40400, message: 表情不存在 }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/logs:
+    get:
+      tags: [日志与遥测]
+      summary: 指令日志（分页）
+      description: |
+        前端：`src/api/log.ts → listLogs()`。日志页分页 + 双过滤；看板固定 `size=200` 拉一次算成功率。
+
+        - 按 `time` 倒序（最新在最前）。
+        - `total` 是过滤后的总数，不是当前页条数。
+        - `status` 选「全部」时前端**不传这个参数**，后端要当可选。
+        - `size=200` 必须支持，别写死上限 100。
+        - `action_name` 由后端存中文名，缺失时前端显示「未知动作 0x33」。
+      parameters:
+        - name: page
+          in: query
+          required: true
+          description: 页码，从 1 开始
+          schema: { type: integer, minimum: 1, default: 1, example: 1 }
+        - name: size
+          in: query
+          required: true
+          description: 每页条数，日志页 10/20/50，看板 200
+          schema: { type: integer, minimum: 1, maximum: 200, default: 10, example: 10 }
+        - name: status
+          in: query
+          required: false
+          description: 按状态过滤；不传表示全部
+          schema:
+            type: string
+            enum: [OK, TIMEOUT, ERROR, PENDING]
+        - name: device_id
+          in: query
+          required: false
+          description: 按设备过滤；不传表示全部
+          schema: { type: integer, example: 1 }
+      responses:
+        '200':
+          description: 分页结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PageResult' }
+              example:
+                code: 0
+                message: ok
+                data:
+                  items:
+                    - id: 1024
+                      device_id: 1
+                      time: '2026-11-08T15:29:41+08:00'
+                      action: 51
+                      action_name: 前进
+                      status: OK
+                      cost_ms: 312
+                      seq: 17
+                      response: 0x81 受理 / 0x02 完成
+                  total: 57
+                  page: 1
+                  size: 10
+                timestamp: 1762587000000
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/telemetry:
+    get:
+      tags: [日志与遥测]
+      summary: 近 24 小时电量遥测
+      description: |
+        前端：`src/api/telemetry.ts → listTelemetry()`，看板电量曲线。
+
+        - **按时间升序**（最旧 → 最新），顺序反了曲线就是倒着走的。
+        - 建议最近 24 小时每小时 1 条，共 24 条。
+        - 少于 2 条前端画出来是空白，库里没数据时最好也返回当前值。
+      responses:
+        '200':
+          description: 遥测点数组
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/TelemetryPoint' }
+              example:
+                code: 0
+                message: ok
+                data:
+                  - { time: '2026-11-07T16:00:00+08:00', battery: 84, voltage: 4.06 }
+                  - { time: '2026-11-07T17:00:00+08:00', battery: 82, voltage: 4.05 }
+                timestamp: 1762587000000
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/weather:
+    get:
+      tags: [设备]
+      summary: 当前天气
+      description: |
+        前端：`src/api/weather.ts → getWeather()`，进监控台拉一次，之后靠 WS `weather` 事件更新。
+        抓取失败建议返回上一次缓存 + `code: 9`（未知），不要返回 500。
+      responses:
+        '200':
+          description: 天气
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/WeatherInfo' }
+              example:
+                code: 0
+                message: ok
+                data: { code: 0, text: 晴, temp: 23, updated_at: '2026-11-08T15:30:00+08:00' }
+                timestamp: 1762587000000
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/scenes:
+    get:
+      tags: [场景]
+      summary: 场景列表
+      description: 前端：`src/api/scene.ts → listScenes()`。数组，不翻页。
+      responses:
+        '200':
+          description: 场景数组
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Scene' }
+              example:
+                code: 0
+                message: ok
+                data:
+                  - id: 1
+                    name: 早上好
+                    description: 起床三连，适合演示开场
+                    steps: [{ action: 49 }, { action: 67 }, { action: 64 }]
+                    updated_at: '2026-11-08T15:00:00+08:00'
+                timestamp: 1762587000000
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [场景]
+      summary: 新建场景
+      description: 前端：`src/api/scene.ts → createScene()`。响应必须带真实 id。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SceneInput' }
+      responses:
+        '200':
+          description: 新建的场景
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Scene' }
+              example:
+                code: 0
+                message: ok
+                data:
+                  id: 10
+                  name: 巡游
+                  description: 走两步转个身
+                  steps: [{ action: 51 }, { action: 53 }]
+                  updated_at: '2026-11-08T15:30:00+08:00'
+                timestamp: 1762587000000
+        default:
+          $ref: '#/components/responses/BusinessError'
+        x-business-errors:
+          - { code: 40002, message: 业务校验失败，message 直接展示给用户 }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/scenes/{id}:
+    put:
+      tags: [场景]
+      summary: 修改场景
+      description: |
+        前端：`src/api/scene.ts → updateScene()`。前端每次全量传 name/description/steps，
+        `steps` 是全量替换——后端要先删旧步骤再插新的，不要增量追加。
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, example: 1 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SceneUpdate' }
+      responses:
+        '200':
+          description: 更新后的场景
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Scene' }
+              example:
+                code: 0
+                message: ok
+                data:
+                  id: 1
+                  name: 巡游
+                  description: ''
+                  steps: [{ action: 51 }]
+                  updated_at: '2026-11-08T15:31:00+08:00'
+                timestamp: 1762587000000
+        default:
+          $ref: '#/components/responses/BusinessError'
+        x-business-errors:
+          - { code: 40400, message: 资源不存在 }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    delete:
+      tags: [场景]
+      summary: 删除场景
+      description: 前端：`src/api/scene.ts → deleteScene()`（页面先弹确认框）。
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, example: 1 }
+      responses:
+        '200':
+          description: 已删除
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/OkResult' }
+              example:
+                code: 0
+                message: ok
+                data: { ok: true }
+                timestamp: 1762587000000
+        default:
+          $ref: '#/components/responses/BusinessError'
+        x-business-errors:
+          - { code: 40400, message: 资源不存在 }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/scenes/{id}/run:
+    post:
+      tags: [场景]
+      summary: 执行场景
+      description: |
+        前端：`src/api/scene.ts → runScene()`。
+
+        **必须立刻返回**，不要等整个场景跑完（三步 × 0.9 秒就接近前端 10 秒超时的一半）。
+        后台用 `asyncio.create_task` 逐步下发，每步推 WS `state` 事件。
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, example: 1 }
+      responses:
+        '200':
+          description: 已开始执行
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          steps: { type: integer, description: 本场景步数, example: 3 }
+              example:
+                code: 0
+                message: ok
+                data: { steps: 3 }
+                timestamp: 1762587000000
+        default:
+          $ref: '#/components/responses/BusinessError'
+        x-business-errors:
+          - { code: 40400, message: 资源不存在 }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    DeviceId:
+      name: id
+      in: path
+      required: true
+      description: 设备 id
+      schema: { type: integer, example: 1 }
+
+  responses:
+    BusinessError:
+      description: 业务失败（HTTP 200 + 非 0 code，前端直接弹 message）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+          example:
+            code: 40002
+            message: 动作码不合法
+            data: null
+            timestamp: 1762587000000
+    Unauthorized:
+      description: 登录态失效（必须是 HTTP 401，前端据此清登录态跳登录页）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiResponse' }
+          example:
+            code: 40101
+            message: 登录已过期，请重新登录
+            data: null
+            timestamp: 1762587000000
+
+  schemas:
+    ApiResponse:
+      type: object
+      description: 统一返回外壳。code=0 成功；非 0 时前端弹出 message。
+      required: [code, message, data, timestamp]
+      properties:
+        code:
+          type: integer
+          description: 0 成功，非 0 见错误码表
+          example: 0
+        message:
+          type: string
+          description: 中文、可直接展示给用户
+          example: ok
+        data:
+          description: 业务数据，无数据时给 null 或 {}
+          nullable: true
+        timestamp:
+          type: integer
+          format: int64
+          description: 毫秒时间戳
+          example: 1762587000000
+
+    User:
+      type: object
+      required: [username, name, role]
+      properties:
+        username: { type: string, example: admin }
+        name: { type: string, description: 显示名, example: 管理员 }
+        role: { type: string, description: 'admin / viewer，前端只展示不校验', example: admin }
+
+    LoginResult:
+      type: object
+      required: [token, user]
+      properties:
+        token:
+          type: string
+          description: JWT，前端存 localStorage 并加 `Bearer ` 前缀
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.example
+        user: { $ref: '#/components/schemas/User' }
+
+    RegisterRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 20
+          pattern: '^[A-Za-z0-9_\u4e00-\u9fa5]+$'
+          description: 3–20 位字母、数字、下划线或中文；前端会先 trim
+          example: tester01
+        password:
+          type: string
+          minLength: 6
+          description: 至少 6 位；后端存哈希，不要明文落库
+          example: secret123
+
+    RegisterResult:
+      type: object
+      required: [username, name]
+      properties:
+        username: { type: string, example: tester01 }
+        name: { type: string, description: 显示名，默认等于 username, example: tester01 }
+
+    Device:
+      type: object
+      required: [id, name, online, firmware, last_heartbeat, battery]
+      properties:
+        id: { type: integer, description: 必须存在 id=1（前端默认选它）, example: 1 }
+        name: { type: string, example: 桌宠一号 · 小灰 }
+        online: { type: boolean, description: 后端按心跳 < 30 秒判定, example: true }
+        firmware: { type: string, example: v2.0.0 }
+        last_heartbeat:
+          type: string
+          description: ISO 8601 带时区
+          example: '2026-11-08T15:29:52+08:00'
+        battery: { type: integer, minimum: 0, maximum: 100, example: 78 }
+        location: { type: string, description: 可选, example: 书桌 }
+
+    DeviceRename:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 20
+          description: 新的桌宠显示名，前后端都会 trim
+          example: 小灰灰
+
+    DeviceStatus:
+      type: object
+      required:
+        - device_id
+        - battery
+        - voltage
+        - action
+        - face
+        - music_state
+        - track
+        - volume
+        - weather_code
+        - temp
+        - updated_at
+      properties:
+        device_id: { type: integer, example: 1 }
+        battery: { type: integer, minimum: 0, maximum: 100, example: 78 }
+        voltage: { type: number, format: float, description: 伏，两位小数, example: 3.92 }
+        action: { type: integer, description: 当前动作码，十进制, example: 49 }
+        face: { type: integer, description: 当前表情 0-6, example: 0 }
+        music_state: { type: integer, enum: [0, 1, 2], description: 0 停止 / 1 播放 / 2 暂停, example: 0 }
+        track: { type: integer, description: 曲目号，1 起, example: 3 }
+        volume: { type: integer, minimum: 0, maximum: 30, example: 15 }
+        weather_code: { type: integer, minimum: 0, maximum: 9, example: 0 }
+        temp: { type: integer, description: 摄氏度，可负, example: 23 }
+        updated_at: { type: string, example: '2026-11-08T15:30:00+08:00' }
+
+    CommandRequest:
+      type: object
+      required: [action]
+      properties:
+        action:
+          type: integer
+          description: 动作码，十进制。19 个合法值见契约文档 5.1 节
+          enum:
+            - 41   # 0x29 放松趴下
+            - 48   # 0x30 蹲下
+            - 49   # 0x31 站立
+            - 50   # 0x32 趴下
+            - 51   # 0x33 前进
+            - 52   # 0x34 后退
+            - 56   # 0x38 提速
+            - 65   # 0x41 前跳
+            - 66   # 0x42 后跳
+            - 72   # 0x48 伸懒腰
+            - 73   # 0x49 后腿拉伸
+            - 53   # 0x35 左转
+            - 54   # 0x36 右转
+            - 55   # 0x37 摇摆
+            - 57   # 0x39 摇摆加速
+            - 64   # 0x40 摇尾巴
+            - 67   # 0x43 打招呼
+            - 68   # 0x44 开灯
+            - 69   # 0x45 关灯
+          example: 51
+
+    CommandAccepted:
+      type: object
+      required: [seq, action, accepted]
+      properties:
+        seq:
+          type: integer
+          minimum: 1
+          maximum: 250
+          description: 1-250 循环，需回填到串口帧并原样出现在 WS ack 里
+          example: 17
+        action: { type: integer, example: 51 }
+        accepted: { type: boolean, example: true }
+
+    MusicRequest:
+      type: object
+      required: [command]
+      properties:
+        command:
+          type: integer
+          enum: [0, 1, 2, 3, 4, 5]
+          description: 0 停止 / 1 播放 / 2 暂停 / 3 下一首 / 4 上一首 / 5 设音量
+          example: 5
+        value:
+          type: integer
+          minimum: 0
+          maximum: 30
+          description: 仅 command=5 有效，其它情况前端传 0
+          default: 0
+          example: 20
+
+    MusicResult:
+      type: object
+      description: 前端不读这个响应，音乐状态以 WS `music` 事件为准
+      properties:
+        ok: { type: boolean, example: true }
+        state: { type: integer, enum: [0, 1, 2], example: 1 }
+        track: { type: integer, example: 3 }
+        volume: { type: integer, minimum: 0, maximum: 30, example: 20 }
+
+    FaceItem:
+      type: object
+      required: [id, name, builtin]
+      properties:
+        id: { type: integer, description: 0-6 内置，自定义从 100 起, example: 0 }
+        name: { type: string, example: 普通 }
+        builtin: { type: boolean, description: true 的不可删, example: true }
+        preview:
+          type: string
+          description: |
+            可选，图片 URL 或 data URI；内置表情前端自己画 SVG，会忽略此字段。
+            如果是 URL，必须是浏览器 <img> 能直接 GET 的地址（不能要求 Authorization 头），
+            例如 /api/faces/101/preview；否则自定义表情会裂图。
+          example: /api/faces/101/preview
+
+    CommandLog:
+      type: object
+      required: [id, device_id, time, action, action_name, status, cost_ms, seq, response]
+      properties:
+        id: { type: integer, example: 1024 }
+        device_id: { type: integer, example: 1 }
+        time: { type: string, description: 下发时间，ISO 带时区, example: '2026-11-08T15:29:41+08:00' }
+        action: { type: integer, example: 51 }
+        action_name: { type: string, description: 动作中文名，由后端存, example: 前进 }
+        status:
+          type: string
+          enum: [OK, TIMEOUT, ERROR, PENDING]
+          description: 四个值固定大写，前端据此上色
+          example: OK
+        cost_ms: { type: integer, description: 下发到应答的毫秒数；超时给 3000 左右；PENDING 给 0, example: 312 }
+        seq: { type: integer, example: 17 }
+        response: { type: string, description: 原始应答摘要，给人看, example: 0x81 受理 / 0x02 完成 }
+
+    PageResult:
+      type: object
+      required: [items, total, page, size]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/CommandLog' }
+        total: { type: integer, description: 过滤后的总数，不是当前页条数, example: 57 }
+        page: { type: integer, example: 1 }
+        size: { type: integer, example: 10 }
+
+    TelemetryPoint:
+      type: object
+      required: [time, battery, voltage]
+      properties:
+        time: { type: string, description: ISO 带时区，数组需按时间升序, example: '2026-11-07T16:00:00+08:00' }
+        battery: { type: integer, minimum: 0, maximum: 100, example: 84 }
+        voltage: { type: number, format: float, example: 4.06 }
+
+    WeatherInfo:
+      type: object
+      required: [code, text, temp, updated_at]
+      properties:
+        code: { type: integer, minimum: 0, maximum: 9, description: 前端按此码选图标，0 晴 / 1 多云 / 2 阴 / 3 小雨 / 4 中雨 / 5 大雨 / 6 雷阵雨 / 7 雪 / 8 雾 / 9 未知, example: 0 }
+        text: { type: string, description: 中文描述，兜底用, example: 晴 }
+        temp: { type: integer, description: 摄氏度，可负, example: 23 }
+        updated_at: { type: string, example: '2026-11-08T15:30:00+08:00' }
+        location:
+          type: string
+          description: 可选，展示地点；不返回时前端兜底「湘潭 · 雨湖区」
+          example: 湘潭 · 雨湖区
+        source:
+          type: string
+          description: 可选，数据源名称，仅用于页面提示
+          example: Open-Meteo
+
+    OkResult:
+      type: object
+      description: 删除类接口的返回值，前端不读内容只看成功
+      required: [ok]
+      properties:
+        ok: { type: boolean, example: true }
+
+    SceneStep:
+      type: object
+      required: [action]
+      description: 只有 action，没有延时/循环字段（节奏由后端定）
+      properties:
+        action: { type: integer, example: 51 }
+
+    Scene:
+      type: object
+      required: [id, name, description, steps, updated_at]
+      properties:
+        id: { type: integer, example: 1 }
+        name: { type: string, example: 早上好 }
+        description: { type: string, description: 可为空字符串，不要 null, example: 起床三连 }
+        steps:
+          type: array
+          items: { $ref: '#/components/schemas/SceneStep' }
+        updated_at: { type: string, example: '2026-11-08T15:00:00+08:00' }
+
+    SceneInput:
+      type: object
+      required: [name, steps]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 20, example: 巡游 }
+        description: { type: string, default: '', example: 走两步转个身 }
+        steps:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/SceneStep' }
+
+    SceneUpdate:
+      type: object
+      description: 字段全可选，但前端每次都全量传 name/description/steps（全量覆盖）
+      properties:
+        name: { type: string, minLength: 1, maxLength: 20, example: 巡游 }
+        description: { type: string, example: '' }
+        steps:
+          type: array
+          items: { $ref: '#/components/schemas/SceneStep' }

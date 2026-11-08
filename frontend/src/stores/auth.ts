@@ -1,7 +1,7 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import type { User } from '@/types'
-import { fetchMe, login as loginApi } from '@/api/auth'
+import { fetchMe, login as loginApi, register as registerApi } from '@/api/auth'
 import { clearSession, getStoredUser, getToken, setStoredUser, setToken } from '@/utils/session'
 
 export const useAuthStore = defineStore('auth', () => {
@@ -18,6 +18,16 @@ export const useAuthStore = defineStore('auth', () => {
       user.value = result.user
       setToken(result.token)
       setStoredUser(result.user)
+    } finally {
+      loading.value = false
+    }
+  }
+
+  /** 注册只建账号，不直接登录；注册完回到登录页用新账号登 */
+  async function register(username: string, password: string): Promise<void> {
+    loading.value = true
+    try {
+      await registerApi(username, password)
     } finally {
       loading.value = false
     }
@@ -41,5 +51,5 @@ export const useAuthStore = defineStore('auth', () => {
     clearSession()
   }
 
-  return { token, user, loading, isLoggedIn, login, refreshMe, reset }
+  return { token, user, loading, isLoggedIn, login, register, refreshMe, reset }
 })

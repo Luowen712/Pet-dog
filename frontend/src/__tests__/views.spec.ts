@@ -74,8 +74,20 @@ describe('页面冒烟', () => {
   it('未登录访问 /devices 会回到登录页', async () => {
     localStorage.clear()
     const view = await mountAt('/devices')
-    expect(view.text()).toContain('登录')
-    expect(view.text()).toContain('STM32 智能桌面宠物')
+    expect(view.text()).toContain('登录控制台')
+    expect(view.text()).toContain('PET-DOG')
+  })
+
+  it('登录页能切到注册表单', async () => {
+    localStorage.clear()
+    const view = await mountAt('/login')
+    const link = view.findAll('.el-link').find((node) => node.text() === '注册')
+    expect(link).toBeTruthy()
+    await link!.trigger('click')
+    await flushPromises()
+    expect(view.text()).toContain('注册账号')
+    expect(view.text()).toContain('Confirm password')
+    expect(view.text()).toContain('创建账号')
   })
 
   it('设备页列出 mock 设备', async () => {

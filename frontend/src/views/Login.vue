@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import type { FormInstance, FormRules } from 'element-plus'
+import type { FormInstance, FormItemRule, FormRules } from 'element-plus'
 import { ElMessage } from 'element-plus'
 import BrandMark from '@/components/BrandMark.vue'
 import RobotDog from '@/components/RobotDog.vue'
@@ -13,11 +13,53 @@ const auth = useAuthStore()
 
 const mockMode = import.meta.env.VITE_USE_MOCK === 'true'
 const formRef = ref<FormInstance>()
-const form = reactive({ username: '', password: '' })
+const isRegister = ref(false)
+const celebrating = ref(false)
+let celebrateTimer: number | null = null
 
-const rules: FormRules = {
-  username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
-  password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
+const form = reactive({ username: '', password: '', confirm: '' })
+
+const confirmRule: FormItemRule = {
+  trigger: 'blur',
+  validator: (_rule, value, callback) => {
+    if (!value) {
+      callback(new Error('请再次输入密码'))
+    } else if (value !== form.password) {
+      callback(new Error('两次输入的密码不一致'))
+    } else {
+      callback()
+    }
+  },
+}
+
+const rules = computed<FormRules>(() => ({
+  username: [
+    { required: true, message: '请输入用户名', trigger: 'blur' },
+    ...(isRegister.value
+      ? [{ min: 3, max: 20, message: '用户名 3–20 个字符', trigger: 'blur' }]
+      : []),
+  ],
+  password: [
+    { required: true, message: '请输入密码', trigger: 'blur' },
+    ...(isRegister.value ? [{ min: 6, message: '密码至少 6 位', trigger: 'blur' }] : []),
+  ],
+  confirm: isRegister.value ? [confirmRule] : [],
+}))
+
+function celebrate(): void {
+  celebrating.value = true
+  if (celebrateTimer !== null) window.clearTimeout(celebrateTimer)
+  celebrateTimer = window.setTimeout(() => {
+    celebrating.value = false
+    celebrateTimer = null
+  }, 1600)
+}
+
+function switchMode(register: boolean): void {
+  if (isRegister.value === register) return
+  isRegister.value = register
+  form.confirm = ''
+  formRef.value?.clearValidate()
 }
 
 function fillDemo(): void {
@@ -26,21 +68,45 @@ function fillDemo(): void {
 }
 
 async function onSubmit(): Promise<void> {
-  if (!formRef.value) return
+  if (!formRef.value || auth.loading || celebrating.value) return
   try {
     await formRef.value.validate()
   } catch {
     return
   }
+
+  // 注册：建号后回到登录，让用户用新账号登进来
+  if (isRegister.value) {
+    try {
+      await auth.register(form.username.trim(), form.password)
+      ElMessage.success('注册成功，用新账号登录即可')
+      celebrate()
+      isRegister.value = false
+      form.password = ''
+      form.confirm = ''
+      formRef.value.clearValidate()
+    } catch {
+      // 错误提示由 request 层统一弹出
+    }
+    return
+  }
+
   try {
     await auth.login(form.username, form.password)
+    celebrate()
     ElMessage.success('登录成功')
+    // 停一下让狗摇完，再跳转
+    await new Promise((resolve) => window.setTimeout(resolve, 1200))
     const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/devices'
     await router.replace(redirect)
   } catch {
     // 错误提示由 request 层统一弹出
   }
 }
+
+onBeforeUnmount(() => {
+  if (celebrateTimer !== null) window.clearTimeout(celebrateTimer)
+})
 </script>
 
 <template>
@@ -76,27 +142,29 @@ async function onSubmit(): Promise<void> {
           </div>
         </div>
 
-        <p class="lede">
-          STM32 智能桌面宠物 · 网页控制台。19 个动作、7 张表情、时间天气和音乐，都在这一个页面里。
-        </p>
-
-        <RobotDog class="dog" />
+        <div class="dog-wrap">
+          <RobotDog :celebrating="celebrating" class="dog" />
+          <span class="dog-hint mono">Click the dog</span>
+        </div>
       </section>
 
       <section class="access">
         <div class="access-box corner">
           <div class="access-head mono">
-            <span>Secure access</span>
+            <span>{{ isRegister ? 'Create account' : 'Secure access' }}</span>
             <span>01 / 01</span>
           </div>
 
-          <h1>登录控制台</h1>
-          <p class="hint">账号由后端初始化，演示环境直接用下面的账号。</p>
+          <h1>{{ isRegister ? '注册账号' : '登录控制台' }}</h1>
+          <p class="hint">
+            {{ isRegister ? '注册只建账号，成功后回到登录页，用新账号进入控制台。' : '用已有账号登录，没有账号就注册一个。' }}
+          </p>
 
           <el-form
             ref="formRef"
             :model="form"
             :rules="rules"
+            :validate-on-rule-change="false"
             size="large"
             class="form"
             @submit.prevent="onSubmit"
@@ -104,7 +172,11 @@ async function onSubmit(): Promise<void> {
             <el-form-item prop="username" class="field-item">
               <div class="field">
                 <span class="field-label mono">Username</span>
-                <el-input v-model="form.username" placeholder="admin" autocomplete="username" />
+                <el-input
+                  v-model="form.username"
+                  :placeholder="isRegister ? '3–20 个字符' : 'admin'"
+                  autocomplete="username"
+                />
               </div>
             </el-form-item>
 
@@ -114,10 +186,22 @@ async function onSubmit(): Promise<void> {
                 <el-input
                   v-model="form.password"
                   type="password"
-                  placeholder="••••••"
+                  :placeholder="isRegister ? '至少 6 位' : '••••••'"
                   show-password
                   autocomplete="current-password"
-                  @keyup.enter="onSubmit"
+                />
+              </div>
+            </el-form-item>
+
+            <el-form-item v-if="isRegister" prop="confirm" class="field-item">
+              <div class="field">
+                <span class="field-label mono">Confirm password</span>
+                <el-input
+                  v-model="form.confirm"
+                  type="password"
+                  placeholder="••••••"
+                  show-password
+                  autocomplete="new-password"
                 />
               </div>
             </el-form-item>
@@ -127,14 +211,25 @@ async function onSubmit(): Promise<void> {
               native-type="submit"
               class="submit"
               :loading="auth.loading"
-              @click="onSubmit"
             >
-              <span>进入控制台</span>
+              <span>{{ isRegister ? '创建账号' : '进入控制台' }}</span>
               <span class="arrow">↗</span>
             </el-button>
           </el-form>
 
-          <div v-if="mockMode" class="demo">
+          <div class="switch">
+            <span class="switch-text mono">{{ isRegister ? '已经有账号？' : '还没有账号？' }}</span>
+            <el-link
+              type="primary"
+              underline="never"
+              class="switch-link"
+              @click="switchMode(!isRegister)"
+            >
+              {{ isRegister ? '返回登录' : '注册' }}
+            </el-link>
+          </div>
+
+          <div v-if="mockMode && !isRegister" class="demo">
             <span>DEMO · admin / 123456</span>
             <el-link type="primary" underline="never" class="fill" @click="fillDemo">
               一键填入
@@ -254,7 +349,7 @@ async function onSubmit(): Promise<void> {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 18px;
+  gap: 16px;
   min-width: 0;
 }
 
@@ -297,16 +392,25 @@ async function onSubmit(): Promise<void> {
   padding-right: 6px;
 }
 
-.lede {
-  max-width: 400px;
-  font-size: 13px;
-  line-height: 1.75;
-  color: var(--dim);
-  letter-spacing: 0.01em;
+.dog-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  max-width: 420px;
 }
 
 .dog {
   margin-top: 2px;
+  max-width: 420px;
+}
+
+.dog-hint {
+  font-size: 8px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--faint);
 }
 
 .access {
@@ -345,12 +449,21 @@ async function onSubmit(): Promise<void> {
 }
 
 .field-item {
-  margin-bottom: 13px;
+  margin-bottom: 20px;
 }
 
 .field-item :deep(.el-form-item__content) {
   display: block;
   line-height: normal;
+}
+
+.field-item :deep(.el-form-item__error) {
+  position: static;
+  margin-top: 4px;
+  font-family: var(--mono);
+  font-size: 9px;
+  line-height: 1.45;
+  letter-spacing: 0.03em;
 }
 
 .field {
@@ -387,6 +500,26 @@ async function onSubmit(): Promise<void> {
   transform: translateY(-50%);
   font-family: var(--mono);
   font-size: 14px;
+}
+
+.switch {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  margin-top: 14px;
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  color: var(--dim);
+}
+
+.switch-text {
+  color: var(--faint);
+}
+
+.switch-link {
+  font-size: 10px;
+  letter-spacing: 0.06em;
 }
 
 .demo {

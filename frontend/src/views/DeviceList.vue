@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Refresh } from '@element-plus/icons-vue'
+import { EditPen, Refresh } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import EmptyState from '@/components/EmptyState.vue'
+import PetCharm from '@/components/PetCharm.vue'
 import type { Device } from '@/types'
 import { formatDateTime, formatRelative } from '@/utils/format'
 import { useDeviceStore } from '@/stores/device'
@@ -10,11 +12,14 @@ import { useDeviceStore } from '@/stores/device'
 const router = useRouter()
 const deviceStore = useDeviceStore()
 
+const renameVisible = ref(false)
+const renameValue = ref('')
+const renameSaving = ref(false)
+let renameTarget: Device | null = null
+
 onMounted(() => {
   if (!deviceStore.loaded) void deviceStore.load()
 })
-
-const summary = computed(() => `${deviceStore.devices.length} 台设备，${deviceStore.onlineCount} 台在线`)
 
 function enter(device: Device): void {
   deviceStore.select(device.id)
@@ -24,6 +29,36 @@ function enter(device: Device): void {
 function refresh(): void {
   void deviceStore.load()
 }
+
+function openRename(device: Device): void {
+  renameTarget = device
+  renameValue.value = device.name
+  renameVisible.value = true
+}
+
+async function submitRename(): Promise<void> {
+  const name = renameValue.value.trim()
+  if (!name) {
+    ElMessage.warning('名字不能为空')
+    return
+  }
+  if (name.length > 20) {
+    ElMessage.warning('名字不能超过 20 个字符')
+    return
+  }
+  if (!renameTarget) return
+
+  renameSaving.value = true
+  try {
+    await deviceStore.rename(renameTarget.id, name)
+    ElMessage.success('名字已更新')
+    renameVisible.value = false
+  } catch {
+    // 错误提示由 request 层统一弹出
+  } finally {
+    renameSaving.value = false
+  }
+}
 </script>
 
 <template>
@@ -32,7 +67,6 @@ function refresh(): void {
       <div>
         <div class="page-kicker">02 / Devices</div>
         <h2 class="page-title">我的设备</h2>
-        <p class="page-sub">{{ summary }} · 选一台进入控制台</p>
       </div>
       <el-button class="ghost" :icon="Refresh" :loading="deviceStore.loading" @click="refresh">
         刷新
@@ -59,7 +93,13 @@ function refresh(): void {
           </span>
         </div>
 
-        <h3 class="name">{{ device.name }}</h3>
+        <div class="name-row">
+          <h3 class="name" :title="device.name">{{ device.name }}</h3>
+          <PetCharm class="charm" :online="device.online" />
+          <button type="button" class="rename" title="修改桌宠名字" @click="openRename(device)">
+            <el-icon><EditPen /></el-icon>
+          </button>
+        </div>
 
         <div class="meta">
           <div class="meta-cell">
@@ -88,6 +128,25 @@ function refresh(): void {
         </div>
       </article>
     </div>
+
+    <el-dialog v-model="renameVisible" title="修改桌宠名字" width="380px">
+      <div class="rename-body">
+        <span class="field-label mono">Pet name</span>
+        <el-input
+          v-model="renameValue"
+          maxlength="20"
+          show-word-limit
+          placeholder="给桌宠起个名字"
+          autofocus
+          @keyup.enter="submitRename"
+        />
+        <p class="rename-hint">1–20 个字符，保存后同步到设备列表。</p>
+      </div>
+      <template #footer>
+        <el-button @click="renameVisible = false">取消</el-button>
+        <el-button type="primary" :loading="renameSaving" @click="submitRename">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -143,11 +202,56 @@ function refresh(): void {
   color: var(--faint);
 }
 
+.name-row {
+  display: flex;
+  align-items: flex-start;
+  min-height: 64px;
+  margin: 4px 0 8px;
+}
+
 .name {
-  margin: 10px 0 14px;
+  max-width: calc(100% - 114px);
+  padding-top: 9px;
+  overflow: hidden;
   font-size: 18px;
   font-weight: 500;
   letter-spacing: -0.01em;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.charm {
+  margin: -6px 0 0 8px;
+}
+
+.rename {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin: 8px 0 0 3px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--faint);
+  opacity: 0.6;
+  cursor: pointer;
+  transition:
+    opacity 0.16s ease,
+    color 0.16s ease,
+    border-color 0.16s ease;
+}
+
+.device:hover .rename {
+  opacity: 1;
+}
+
+.rename:hover {
+  border-color: var(--hair);
+  color: var(--ink);
 }
 
 .meta {
@@ -219,6 +323,24 @@ function refresh(): void {
 .arrow {
   font-family: var(--mono);
   margin-left: 4px;
+}
+
+.rename-body {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.field-label {
+  font-size: 8px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.rename-hint {
+  font-size: 11px;
+  color: var(--faint);
 }
 
 @media (max-width: 720px) {

@@ -92,6 +92,9 @@ export interface WeatherInfo {
   text: string
   temp: number
   updated_at: string
+  /** 可选的展示信息：数据地点与来源，后端不返回时前端用默认地点兜底 */
+  location?: string
+  source?: string
 }
 
 export interface AckData {

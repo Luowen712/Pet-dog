@@ -671,6 +671,11 @@ h3 {
   box-shadow: 0 30px 90px rgba(20, 20, 20, 0.16);
 }
 
+.el-overlay {
+  background-color: rgba(20, 20, 20, 0.26);
+  backdrop-filter: blur(3px);
+}
+
 .el-dialog__header {
   padding: 18px 22px 14px;
   margin-right: 0;

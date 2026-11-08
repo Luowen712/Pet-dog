@@ -11,6 +11,7 @@ import type {
 } from '@/types'
 import { ACTIONS, actionName } from '@/constants/actions'
 import { FACES } from '@/constants/faces'
+import { WEATHER_LOCATION, WEATHER_MAP, weatherCodeFromWmo } from '@/constants/weather'
 import { ApiError } from '@/utils/errors'
 import { runtime } from './runtime'
 
@@ -74,6 +75,34 @@ function freshDevice(device: Device): Device {
   return { ...device, last_heartbeat: iso(-Math.floor(Math.random() * 20000)) }
 }
 
+/* 改名后刷新页面也要记住，先存在 localStorage 里，后端上线后以服务端为准 */
+const MOCK_DEVICE_NAMES_KEY = 'petdog_mock_device_names'
+
+function readDeviceNames(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(MOCK_DEVICE_NAMES_KEY)
+    return raw ? (JSON.parse(raw) as Record<string, string>) : {}
+  } catch {
+    return {}
+  }
+}
+
+function saveDeviceName(id: number, name: string): void {
+  const names = readDeviceNames()
+  names[String(id)] = name
+  localStorage.setItem(MOCK_DEVICE_NAMES_KEY, JSON.stringify(names))
+}
+
+function applyDeviceNames(): void {
+  const names = readDeviceNames()
+  devices.forEach((device) => {
+    const saved = names[String(device.id)]
+    if (saved) device.name = saved
+  })
+}
+
+applyDeviceNames()
+
 const STATUS_POOL: CommandState[] = ['OK', 'OK', 'OK', 'OK', 'TIMEOUT', 'ERROR']
 
 const logs: CommandLog[] = Array.from({ length: 57 }, (_, index) => {
@@ -130,7 +159,116 @@ const telemetry: TelemetryPoint[] = Array.from({ length: 24 }, (_, index) => {
   }
 })
 
-const weather: WeatherInfo = { code: 0, text: '晴', temp: 23, updated_at: iso() }
+const weather: WeatherInfo = {
+  code: 0,
+  text: '晴',
+  temp: 23,
+  updated_at: iso(),
+  location: WEATHER_LOCATION.name,
+  source: 'Mock',
+}
+
+const WEATHER_CACHE_KEY = 'petdog_weather_cache'
+const WEATHER_TTL = 10 * 60 * 1000
+
+function readWeatherCache(): WeatherInfo | null {
+  try {
+    const raw = localStorage.getItem(WEATHER_CACHE_KEY)
+    if (!raw) return null
+    const info = JSON.parse(raw) as WeatherInfo
+    const age = now() - new Date(info.updated_at).getTime()
+    return age >= 0 && age < WEATHER_TTL ? info : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 开发期没有后端，Mock 直接抓 Open-Meteo（免 key、允许跨域）。
+ * 正式环境这段应搬回后端：每 10 分钟抓一次、缓存，再通过 /api/weather 和 WS 推给前端。
+ */
+async function fetchLiveWeather(): Promise<WeatherInfo | null> {
+  const cached = readWeatherCache()
+  if (cached) return cached
+  // jsdom 测试环境不发外网请求
+  if (import.meta.env.MODE === 'test') return null
+
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), 6000)
+  try {
+    const query = new URLSearchParams({
+      latitude: String(WEATHER_LOCATION.latitude),
+      longitude: String(WEATHER_LOCATION.longitude),
+      current: 'temperature_2m,weather_code',
+      timezone: WEATHER_LOCATION.timezone,
+    })
+    const response = await fetch(`https://api.open-meteo.com/v1/forecast?${query}`, {
+      signal: controller.signal,
+    })
+    if (!response.ok) return null
+
+    const data = (await response.json()) as {
+      current?: { temperature_2m?: number; weather_code?: number }
+    }
+    const wmo = Number(data.current?.weather_code)
+    const temp = Number(data.current?.temperature_2m)
+    if (!Number.isFinite(wmo) || !Number.isFinite(temp)) return null
+
+    const code = weatherCodeFromWmo(wmo)
+    const info: WeatherInfo = {
+      code,
+      text: WEATHER_MAP[code]?.text ?? '未知',
+      temp: Math.round(temp),
+      updated_at: new Date().toISOString(),
+      location: WEATHER_LOCATION.name,
+      source: 'Open-Meteo',
+    }
+    localStorage.setItem(WEATHER_CACHE_KEY, JSON.stringify(info))
+    return info
+  } catch {
+    // 断网、被墙、超时都退回静态兜底，不要让页面卡住
+    return null
+  } finally {
+    window.clearTimeout(timer)
+  }
+}
+
+/* ---------------------------- 假账号（本地） ---------------------------- */
+
+const MOCK_USERS_KEY = 'petdog_mock_users'
+const MOCK_SESSION_KEY = 'petdog_mock_session'
+
+interface MockUser {
+  username: string
+  password: string
+  name: string
+}
+
+function readUsers(): MockUser[] {
+  try {
+    const raw = localStorage.getItem(MOCK_USERS_KEY)
+    return raw ? (JSON.parse(raw) as MockUser[]) : []
+  } catch {
+    return []
+  }
+}
+
+function writeUsers(users: MockUser[]): void {
+  localStorage.setItem(MOCK_USERS_KEY, JSON.stringify(users))
+}
+
+function readSession(): { username: string; name: string; role: string } | null {
+  try {
+    const raw = localStorage.getItem(MOCK_SESSION_KEY)
+    return raw ? (JSON.parse(raw) as { username: string; name: string; role: string }) : null
+  } catch {
+    return null
+  }
+}
+
+function saveSession(session: { username: string; name: string; role: string }): void {
+  localStorage.setItem(MOCK_SESSION_KEY, JSON.stringify(session))
+}
 
 /* ------------------------------- 路由 ------------------------------- */
 
@@ -149,17 +287,43 @@ export async function matchMock(config: AxiosRequestConfig): Promise<MockHit> {
     await delay(320)
     const username = String(body.username ?? '')
     const password = String(body.password ?? '')
-    if (username !== 'admin' || password !== '123456') {
+    const isAdmin = username === 'admin' && password === '123456'
+    const account = readUsers().find((user) => user.username === username && user.password === password)
+
+    if (!isAdmin && !account) {
       throw new ApiError(40001, '用户名或密码错误')
     }
-    return hit({
-      token: `mock.${now()}`,
-      user: { username: 'admin', name: '管理员', role: 'admin' },
-    })
+
+    const session = isAdmin
+      ? { username: 'admin', name: '管理员', role: 'admin' }
+      : { username: account!.username, name: account!.name, role: 'user' }
+    saveSession(session)
+
+    return hit({ token: `mock.${username}.${now()}`, user: session })
+  }
+
+  if (method === 'post' && path === '/auth/register') {
+    await delay(320)
+    const username = String(body.username ?? '').trim()
+    const password = String(body.password ?? '')
+
+    if (!/^[a-zA-Z0-9_\u4e00-\u9fa5]{3,20}$/.test(username)) {
+      throw new ApiError(40002, '用户名需 3–20 位字母、数字、下划线或中文')
+    }
+    if (password.length < 6) {
+      throw new ApiError(40002, '密码至少 6 位')
+    }
+    if (username === 'admin' || readUsers().some((user) => user.username === username)) {
+      throw new ApiError(40900, '用户名已存在')
+    }
+
+    const account: MockUser = { username, password, name: username }
+    writeUsers([...readUsers(), account])
+    return hit({ username: account.username, name: account.name })
   }
 
   if (method === 'get' && path === '/auth/me') {
-    return hit({ username: 'admin', name: '管理员', role: 'admin' })
+    return hit(readSession() ?? { username: 'admin', name: '管理员', role: 'admin' })
   }
 
   /* 设备 */
@@ -188,6 +352,19 @@ export async function matchMock(config: AxiosRequestConfig): Promise<MockHit> {
   if (method === 'get' && deviceMatch) {
     const device = devices.find((item) => item.id === Number(deviceMatch[1]))
     if (!device) throw new ApiError(40400, '设备不存在')
+    return hit(freshDevice(device))
+  }
+
+  // 改名：接口契约里还没定义，先按 PATCH /devices/{id} { name } 写
+  if (method === 'patch' && deviceMatch) {
+    const device = devices.find((item) => item.id === Number(deviceMatch[1]))
+    if (!device) throw new ApiError(40400, '设备不存在')
+    const name = String(body.name ?? '').trim()
+    if (name.length < 1 || name.length > 20) {
+      throw new ApiError(40002, '名字需要 1–20 个字符')
+    }
+    device.name = name
+    saveDeviceName(device.id, name)
     return hit(freshDevice(device))
   }
 
@@ -312,7 +489,8 @@ export async function matchMock(config: AxiosRequestConfig): Promise<MockHit> {
 
   /* 天气 */
   if (method === 'get' && path === '/weather') {
-    return hit({ ...weather, updated_at: iso() })
+    const live = await fetchLiveWeather()
+    return hit(live ?? { ...weather, updated_at: iso() })
   }
 
   /* 场景 */

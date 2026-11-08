@@ -1,7 +1,7 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import type { Device } from '@/types'
-import { listDevices } from '@/api/device'
+import { listDevices, renameDevice } from '@/api/device'
 import { getStoredDeviceId, setStoredDeviceId } from '@/utils/session'
 
 export const useDeviceStore = defineStore('device', () => {
@@ -27,10 +27,17 @@ export const useDeviceStore = defineStore('device', () => {
     }
   }
 
+  async function rename(id: number, name: string): Promise<void> {
+    const updated = await renameDevice(id, name)
+    devices.value = devices.value.map((device) =>
+      device.id === id ? { ...device, ...updated } : device,
+    )
+  }
+
   function select(id: number): void {
     currentId.value = id
     setStoredDeviceId(id)
   }
 
-  return { devices, loading, loaded, currentId, current, onlineCount, load, select }
+  return { devices, loading, loaded, currentId, current, onlineCount, load, rename, select }
 })
