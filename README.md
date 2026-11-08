@@ -10,7 +10,7 @@
 |---|---|---|
 | `firmware/` | STM32 固件：Keil 工程、PWM 驱动、串口协议、动作表、字库 | 嵌入式 |
 | `hardware/` | 原理图、PCB、BOM、外壳模型、装配说明 | 嵌入式 |
-| `backend/` | Python 后端：FastAPI 服务、串口链路、SQLite、天气与校时 | 后端 |
+| `backend/` | Python 后端：FastAPI 服务、串口链路、MySQL、天气与校时 | 后端 |
 | `frontend/` | Vue3 网页控制台：登录、设备、监控台、日志、遥测 | 前端 |
 | `docs/` | 六份计划文档（分工方案、三条线逐日计划、答辩方案、功能汇总表） | 全员 |
 
@@ -31,6 +31,15 @@ cd pet-dog
 - 谁都该看一遍：`docs/STM32智能桌面宠物_项目分工与实施方案_V2.0.docx`
 
 后端那份文档第 7 章是照着抄就能跑的完整代码，第三章是开工前要装的东西。第一次搭环境按第三章走一遍，遇到问题查第五章。
+
+开工检查：起后端之前先确认 MySQL 服务在跑、库连得上。它没起来，后端只会丢一堆红字：
+
+```sql
+-- 在 mysql -uroot -p 里执行一次
+CREATE DATABASE IF NOT EXISTS pet_dog DEFAULT CHARSET utf8mb4 COLLATE utf8mb4_unicode_ci;
+```
+
+建账号、连接串与依赖清单在后端文档 7.4 节。
 
 ## 分支约定
 
