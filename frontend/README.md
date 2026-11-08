@@ -107,7 +107,7 @@ frontend/
 
 ## 接口约定（前端实际用的）
 
-后端路径以 `docs/openapi.yaml` 和《前后端接口契约 V1.1》为准，`/docs` 是运行时权威。这里记的是前端已经写死、改起来要一起改的地方：
+后端路径以 `docs/contracts/openapi.yaml` 与 `docs/contracts/http-api.md` 为准，后端的 `/docs` 是运行时权威。这里记的是前端已经写死、改起来要一起改的地方：
 
 ```
 POST /api/auth/login            { username, password } → { token, user }
@@ -118,7 +118,9 @@ GET  /api/devices/{id}
 PATCH /api/devices/{id}         { name }    # 契约 §3.7，改名
 GET  /api/devices/{id}/status
 POST /api/devices/{id}/music    { command, value }
-POST /api/commands/send         { action }  → { seq, action, accepted }
+POST /api/commands/send         { action }  → { cmd_id, seq, action, accepted, status, transport }
+GET  /api/commands/{id}                     # 断线对账用，记录不存在返回 code 40400
+POST /api/events/ticket         { device_id } → { ticket, expires_in_sec }
 GET  /api/faces
 POST /api/faces                 上传，multipart 字段名 file
 POST /api/faces/current         { face }
@@ -131,7 +133,7 @@ POST /api/scenes
 PUT  /api/scenes/{id}
 DELETE /api/scenes/{id}
 POST /api/scenes/{id}/run
-WS   /ws/device?token=xxx&device_id=1
+WS   /ws/device?device_id=1&ticket=<一次性票据>
 ```
 
 返回体统一 `{ code, message, data, timestamp }`，`code === 0` 才取 `data`，其余抛错并弹提示。前端只在 `request.ts` 里拆一次壳，页面里不出现 `.data.data`。
@@ -140,7 +142,7 @@ WebSocket 事件五种：
 
 ```json
 { "event": "state",   "data": { "battery": 78, "voltage": 3.92, "action": 51, "face": 0, "music_state": 0, "track": 3, "weather_code": 0, "temp": 23 } }
-{ "event": "ack",     "data": { "seq": 12, "status": "OK", "cost_ms": 860 } }
+{ "event": "ack",     "data": { "cmd_id": "6f1f…", "seq": 12, "status": "OK", "cost_ms": 860 } }
 { "event": "link",    "data": { "online": true } }
 { "event": "music",   "data": { "state": 1, "track": 3, "volume": 15 } }
 { "event": "weather", "data": { "code": 0, "text": "晴", "temp": 23 } }
@@ -150,7 +152,8 @@ WebSocket 事件五种：
 
 - Node 24 / pnpm 11 建出来的工程，TS 是 6.0、Vite 是 8。`baseUrl` 在 TS 6 里废弃了，路径别名只用 `paths`。
 - Element Plus 全量引入，没配 `unplugin-auto-import`，按计划文档第 2.2 节的建议来。
-- 三态按钮的 `pending` 没有把按钮锁死：点第二次会重发并换一个新 seq，旧 ack 按 seq 找不到 pending 就丢掉。这样「同一动作连点两次不串号」能自测。
+- 三态按钮的 `pending` 没有把按钮锁死：点第二次会重发并换一个新 `cmd_id`，旧回执按 `cmd_id` 找不到 pending 就丢掉。这样「同一动作连点两次不串号」能自测。
+- 按钮 3 秒变红是纯展示（`DISPLAY_TIMEOUT_MS`），不写任何命令状态；真正的终态只由后端 `command_log` 判定。
 - 图标用 Element Plus 图标 + 内联 SVG（脸、天气、机器狗、logo），没有额外图片资源。
 - 视觉是后改的一版：暖白纸底、细网格、等宽小标签、发丝线卡片。没引 three.js，机器狗是手画的 SVG 线稿。
 - 加了一套 jsdom 冒烟测试，`pnpm test` 能跑；计划文档里没有这一项，但它能挡住「改一处白屏」这类低级事故。

@@ -45,13 +45,21 @@ async function handleUnauthorized(): Promise<void> {
   }
 }
 
+export interface RequestOptions {
+  /** 静默模式：失败不弹 toast，由调用方自己处理（断线对账时命令记录可能已被清理） */
+  silent?: boolean
+}
+
 /**
  * 统一请求入口：
  * 1. Mock 开启时先走内置假后端（后端未启动也能把页面跑起来）
  * 2. 拆掉 { code, message, data } 外壳，页面直接拿 data
  * 3. 401 清登录态跳登录页，其余错误统一 toast
  */
-export async function request<T>(config: AxiosRequestConfig): Promise<T> {
+export async function request<T>(
+  config: AxiosRequestConfig,
+  options: RequestOptions = {},
+): Promise<T> {
   try {
     if (USE_MOCK) {
       const mocked = await matchMock(config)
@@ -67,7 +75,7 @@ export async function request<T>(config: AxiosRequestConfig): Promise<T> {
     return body as unknown as T
   } catch (error) {
     if (error instanceof ApiError) {
-      ElMessage.error(error.message)
+      if (!options.silent) ElMessage.error(error.message)
       throw error
     }
     if (axios.isAxiosError(error)) {
@@ -77,10 +85,10 @@ export async function request<T>(config: AxiosRequestConfig): Promise<T> {
         throw new ApiError(40101, '登录已过期')
       }
       const message = status ? `请求失败（HTTP ${status}）` : '网络异常，请检查后端服务是否已启动'
-      ElMessage.error(message)
+      if (!options.silent) ElMessage.error(message)
       throw new ApiError(status ?? -1, message)
     }
-    ElMessage.error('请求失败')
+    if (!options.silent) ElMessage.error('请求失败')
     throw error
   }
 }

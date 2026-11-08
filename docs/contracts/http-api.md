@@ -1,40 +1,44 @@
-# STM32 智能桌面宠物 · 前后端接口契约 V1.1
+# STM32 智能桌面宠物 · 前后端接口契约 V2.0
 
 | 项目 | 内容 |
 |---|---|
-| 文档编号 | PET-API-V1.1 |
-| 版本 / 日期 | V1.1 / 2026-11-08 |
+| 文档编号 | PET-API-V2.0 |
+| 版本 / 日期 | V2.0 / 2026-11-08 |
 | 面向 | 后端（FastAPI）实现方为主，前端对照 |
-| 依据 | `frontend/src/api/*.ts`、`frontend/src/types/index.ts`、`frontend/src/mock/`、`frontend/src/utils/ws.ts` |
-| 规模 | 22 个 HTTP 接口 + 1 条 WebSocket（共 23 条） |
-| 本版改动 | 新增注册 `POST /api/auth/register`、设备改名 `PATCH /api/devices/{id}`；`WeatherInfo` 增加可选 `location` / `source`；明确表情 `preview` 必须匿名可 GET；新增 §2.1「页面已实现、后端待落地」清单 |
-| 配套文件 | `docs/openapi.yaml`（可直接导入 Apifox / Swagger Editor / Postman） |
+| 依据 | V1.1（由 `frontend/src/api/*.ts`、`types/index.ts`、`mock/`、`utils/ws.ts` 反向导出）与 V1.0（`docs/contracts/` 原稿）合并 |
+| 规模 | 24 个 HTTP 接口 + 1 条 WebSocket（共 25 条） |
+| 本版改动 | **合并两套并行契约**：统一命名、命令主键改为 `cmd_id`、WebSocket 改一次性票据、错误码收敛为 9 个、补回 `GET /api/commands/{id}` 与 `POST /api/events/ticket`、删除 `GET /api/commands/active`。逐条见文末变更记录 |
+| 配套文件 | `docs/contracts/openapi.yaml`（唯一机器可读契约，可直接导入 Apifox / Swagger Editor / Postman） |
 
 ---
 
 ## 0. 这份文件是什么，怎么用
 
-前端网页已经写完了，字段名、路径、返回体全都在 TypeScript 类型里定死了。所以这份文档不是「设计稿」，是**从代码里反向导出的契约**——后端照着实现，前端一行都不用改。
+这份契约最早是从已完成的前端代码反向导出的，后来又与后端侧的协议契约合并过一次。现在它是**唯一的真源**，两端都照它写，不存在第二套口径。
 
 三条规矩：
 
-1. **路径和字段名以本文件为准**，不以口头讨论为准。前端改一个字段要动 `types/index.ts`、`api/*.ts`、`mock/index.ts` 三处，成本比后端改一行高得多。
+1. **契约以 `docs/contracts/` 为准**，不以口头讨论、也不以任何单一端的现有代码为准。代码与契约不一致时，改代码。
 2. **真要改，先改本文件和 `openapi.yaml`，再各自改代码**，两边同时动。这是 README「接口先定，再各写各的」那一节的具体执行方式。
-3. 联调时 `http://127.0.0.1:8000/docs` 是**运行时**的权威（看服务到底起了哪些路由）；但如果 `/docs` 里的字段名和本文件不一致，那是 bug，按本文件改。
+3. 联调时 `http://127.0.0.1:8000/docs` 是**运行时**的现状（看服务到底起了哪些路由）；但如果 `/docs` 里的字段名和本文件不一致，那是 bug，按本文件改。
 
-文件只有两个，一起发给后端同学：
+契约一共六份，同属 `docs/contracts/`，一起发给后端同学：
 
-- `docs/STM32智能桌面宠物_前后端接口契约_V1.1.md`（本文，人看）
-- `docs/openapi.yaml`（机器可读，导入 Apifox 后可以直接生成 Mock、发请求、导测试）
+- `docs/contracts/http-api.md`（本文，人看）
+- `docs/contracts/openapi.yaml`（机器可读，导入 Apifox 后可以直接生成 Mock、发请求、导测试）
+- `docs/contracts/frame.md`（串口帧格式）
+- `docs/contracts/events.md`（WebSocket 事件语义与重连对账）
+- `docs/contracts/error-codes.md`（业务码与设备错误码）
+- `docs/contracts/action-timing.md`（超时数值的唯一权威源）
 
 ---
 
 ## 目录
 
 1. 全局约定
-2. 接口总表（23 条）
+2. 接口总表（25 条）
    - 2.1 页面已实现、落地必须靠后端/固件的能力
-3. 逐条接口（HTTP 22 条）
+3. 逐条接口（HTTP 24 条）
 4. WebSocket `/ws/device`
 5. 枚举表（动作码 / 表情 / 天气 / 音乐 / 日志状态）
 6. REST ↔ 串口 对照
@@ -64,7 +68,7 @@ http://127.0.0.1:8000/api/health
 http://127.0.0.1:8000/api/auth/login
 http://127.0.0.1:8000/api/devices
 ...
-ws://127.0.0.1:8000/ws/device?token=xxx&device_id=1
+ws://127.0.0.1:8000/ws/device?device_id=1&ticket=xxx
 ```
 
 配路由时写 `APIRouter(prefix="/api/auth")` 或者 `include_router(..., prefix="/api")` 都行，只要最终路径对得上。**前缀少写一个 `/api`，前端全部 404。**
@@ -120,19 +124,24 @@ ws://127.0.0.1:8000/ws/device?token=xxx&device_id=1
 |---|---|
 | 登录后携带 | 请求头 `Authorization: Bearer <token>` |
 | 前端存储 | localStorage，键名 `petdog_token`（`utils/session.ts`） |
-| WebSocket | 走 query：`?token=<encodeURIComponent(token)>` |
+| WebSocket | **不直接带 JWT**：先 `POST /api/events/ticket` 换一次性票据，再 `?device_id=1&ticket=<ticket>` 建连 |
 | 无刷新机制 | 前端没有 refresh token，过期只能重新登录 |
+
+**为什么 WebSocket 不能直接把 JWT 放 URL**：浏览器的 `new WebSocket()` 不能设置自定义请求头，只能把凭证塞进 query。URL 会进 access log、代理日志、浏览器历史——一个 24 小时有效的 JWT 落在这些地方等于长期凭证泄漏。所以改成 30 秒、一次性、绑定 (user_id, device_id) 的票据，用完即焚。详见 `events.md` §1。
 
 ### 1.7 超时
 
 | 项 | 值 | 说明 |
 |---|---|---|
 | axios 超时 | **10 秒** | 超过就报「网络异常」，所以任何接口都别阻塞超过 10 秒 |
-| 动作 ack 超时 | **3 秒** | 前端自己计时，3 秒没收到 WS `ack` 就把按钮标红。见第 8 章 |
+| 动作受理超时 `T_ACK_MS` | **600 毫秒** | **后端判定**：600ms 没等到 `0x81` 就把这条命令置 `unknown`，不是前端判。数值见 `action-timing.md` §5 |
+| 动作完成超时 `T_done` | 动作实测时长 + 600ms | 仅 `blocking` 类；未测量的动作只装 30 秒安全网。见 `action-timing.md` §3 |
+
+> 前端按钮的「3 秒变红」是**纯展示**的乐观反馈，不是契约里的判定：真正的终态只有 `command_log` 四态。两者不要互相引用，否则一处改数值另一处必然失效。
 
 ### 1.8 分页
 
-`page` 从 **1** 开始（不是 0），`size` 默认 10。返回：
+`page` 从 **1** 开始（不是 0），`page` 不传取 1、`size` 不传取 20（上限 200）。返回：
 
 ```json
 { "items": [], "total": 0, "page": 1, "size": 10 }
@@ -142,33 +151,37 @@ ws://127.0.0.1:8000/ws/device?token=xxx&device_id=1
 
 ---
 
-## 2. 接口总表（23 条）
+## 2. 接口总表（25 条）
 
 | # | 方法 | 路径 | 用途 | 用到它的页面 | 鉴权 |
 |---|---|---|---|---|---|
 | 1 | GET | `/api/health` | 健康检查（前端不调，联调自检用） | — | 否 |
 | 2 | POST | `/api/auth/login` | 登录换 token | 登录页 | 否 |
-| 3 | POST | `/api/auth/register` | 注册账号（V1.1 新增） | 登录页 | 否 |
+| 3 | POST | `/api/auth/register` | 注册账号 | 登录页 | 否 |
 | 4 | GET | `/api/auth/me` | 查当前用户 | 布局头部 | 是 |
 | 5 | GET | `/api/devices` | 设备列表 | 设备页、日志页、看板 | 是 |
 | 6 | GET | `/api/devices/{id}` | 单台设备（前端暂未调用，预留） | — | 是 |
-| 7 | PATCH | `/api/devices/{id}` | 修改桌宠名字（V1.1 新增） | 设备页 | 是 |
+| 7 | PATCH | `/api/devices/{id}` | 修改桌宠名字 | 设备页 | 是 |
 | 8 | GET | `/api/devices/{id}/status` | 状态快照（进监控台时拉一次） | 监控台 | 是 |
 | 9 | POST | `/api/devices/{id}/music` | 音乐控制 | 监控台音乐面板 | 是 |
 | 10 | POST | `/api/commands/send` | 下发一个动作 | 监控台、场景执行 | 是 |
-| 11 | GET | `/api/faces` | 表情列表 | 表情页、监控台 | 是 |
-| 12 | POST | `/api/faces` | 上传自定义表情（multipart） | 表情页 | 是 |
-| 13 | POST | `/api/faces/current` | 切换当前表情 | 表情页、监控台 | 是 |
-| 14 | DELETE | `/api/faces/{id}` | 删除自定义表情 | 表情页 | 是 |
-| 15 | GET | `/api/logs` | 指令日志（分页 + 过滤） | 日志页、看板 | 是 |
-| 16 | GET | `/api/telemetry` | 近 24 小时电量遥测 | 看板 | 是 |
-| 17 | GET | `/api/weather` | 当前天气 | 监控台、时钟卡 | 是 |
-| 18 | GET | `/api/scenes` | 场景列表 | 场景页 | 是 |
-| 19 | POST | `/api/scenes` | 新建场景 | 场景页 | 是 |
-| 20 | PUT | `/api/scenes/{id}` | 修改场景 | 场景页 | 是 |
-| 21 | DELETE | `/api/scenes/{id}` | 删除场景 | 场景页 | 是 |
-| 22 | POST | `/api/scenes/{id}/run` | 执行场景 | 场景页 | 是 |
-| 23 | WS | `/ws/device?token=&device_id=` | 实时状态 / 应答 / 链路 / 音乐 / 天气 | 全局（进监控台就连） | 是（query token） |
+| 11 | GET | `/api/commands/{id}` | 按 `cmd_id` 查单条命令（断线对账） | 监控台（重连后） | 是 |
+| 12 | POST | `/api/events/ticket` | 换 WebSocket 一次性票据 | 监控台（建连前） | 是 |
+| 13 | GET | `/api/faces` | 表情列表 | 表情页、监控台 | 是 |
+| 14 | POST | `/api/faces` | 上传自定义表情（multipart） | 表情页 | 是 |
+| 15 | POST | `/api/faces/current` | 切换当前表情 | 表情页、监控台 | 是 |
+| 16 | DELETE | `/api/faces/{id}` | 删除自定义表情 | 表情页 | 是 |
+| 17 | GET | `/api/logs` | 指令日志（分页 + 过滤） | 日志页、看板 | 是 |
+| 18 | GET | `/api/telemetry` | 近 24 小时电量遥测 | 看板 | 是 |
+| 19 | GET | `/api/weather` | 当前天气 | 监控台、时钟卡 | 是 |
+| 20 | GET | `/api/scenes` | 场景列表 | 场景页 | 是 |
+| 21 | POST | `/api/scenes` | 新建场景 | 场景页 | 是 |
+| 22 | PUT | `/api/scenes/{id}` | 修改场景 | 场景页 | 是 |
+| 23 | DELETE | `/api/scenes/{id}` | 删除场景 | 场景页 | 是 |
+| 24 | POST | `/api/scenes/{id}/run` | 执行场景 | 场景页 | 是 |
+| 25 | WS | `/ws/device?device_id=&ticket=` | 实时状态 / 应答 / 链路 / 音乐 / 天气 | 全局（进监控台就连） | 是（一次性票据） |
+
+> 路径占位符统一写 `{id}`，不写 `{deviceId}`；所有 JSON 字段与 query 参数名统一 snake_case。
 
 **仍然不需要实现的**：用户删除/角色权限管理、校时接口（0x08 由后端定时自己下发，不经过 HTTP）、日志导出、WebSocket 客户端消息（前端只收不发）。
 
@@ -182,7 +195,7 @@ ws://127.0.0.1:8000/ws/device?token=xxx&device_id=1
 | **注册账号** | 登录页「注册」 | 表单校验（3–20 位、≥6 位、两次一致）、调接口、成功回登录 | `users` 表、唯一索引、密码哈希、重名返回 40900 | — | §3.3 |
 | 设备列表 | 设备页 | 卡片、在线点、当前设备记忆 | `devices` 表、心跳 < 30 秒判在线、保证 id=1 存在 | 每 5 秒上报 0x03 | §3.5 |
 | **设备改名** | 设备页铅笔 | 弹窗、PATCH、列表即时刷新 | 更新 `device.name`、返回完整 Device | 可选：屏幕同步显示名字 | §3.7 |
-| 动作下发 / 三态 | 控制台 | 19 个按钮、seq 配对、3 秒超时 | `/commands/send` 立即返回 seq；串口帧；更新日志；推 `ack` | 0x01 执行、0x81 受理、0x02 完成 | §3.10 |
+| 动作下发 | 控制台 | 19 个按钮、按 `cmd_id` 认领回执（`seq` 只做瞬时映射）、按钮 3 秒转红（仅展示） | `/commands/send` 立即返回 `cmd_id` + seq；串口帧；更新 `command_log`；推 `ack` | 0x01 执行、0x81 受理、0x02 完成 | | §3.10 |
 | 实时状态 | 控制台状态条 | 电量/电压/动作/表情、WS 退避重连 | 解析 0x03、缓存快照、广播 `state` / `link` | 0x03 状态帧、心跳 | §4 |
 | **天气** | 控制台时钟卡 | 图标映射、温度/地点展示、10 分钟缓存 | 定时抓 Open-Meteo（湘潭雨湖区），缓存，返回 `/weather` 并推 `weather` | 0x09 下发屏显 | §3.17 |
 | **音乐播放** | 控制台音乐面板 | 播放/暂停/上下首/停止/音量 0–30、曲目显示 | `/music` → 0x0A 帧；推 `music` 事件（state/track/volume） | DFPlayer + TF 卡 + 0x0A / 0x0B | §3.9 |
@@ -238,7 +251,7 @@ ws://127.0.0.1:8000/ws/device?token=xxx&device_id=1
 | `token` | string | JWT，前端原样存 localStorage 并加 `Bearer ` 前缀 |
 | `user.username` | string | 账号 |
 | `user.name` | string | 显示名，中文 |
-| `user.role` | string | `admin` / `viewer`，前端目前只展示不校验 |
+| `user.role` | string | 只有 `admin` / `user` 两个值（后端 `role or "user"`），前端只展示不校验 |
 
 **失败**：`code: 40001`，`message: "用户名或密码错误"`（HTTP 200）。前端把这个 message 直接弹出来，所以别写成 `invalid credentials`。
 
@@ -246,7 +259,7 @@ ws://127.0.0.1:8000/ws/device?token=xxx&device_id=1
 
 ---
 
-### 3.3 POST `/api/auth/register`（V1.1 新增）
+### 3.3 POST `/api/auth/register`
 
 前端调用点：`api/auth.ts → register()`，登录页「注册」切换。
 
@@ -355,7 +368,7 @@ ws://127.0.0.1:8000/ws/device?token=xxx&device_id=1
 
 ---
 
-### 3.7 PATCH `/api/devices/{id}`（V1.1 新增，改名）
+### 3.7 PATCH `/api/devices/{id}`（改名）
 
 前端调用点：`api/device.ts → renameDevice()`，设备页名字后的铅笔按钮。
 
@@ -480,27 +493,110 @@ ws://127.0.0.1:8000/ws/device?token=xxx&device_id=1
 **响应 data**
 
 ```json
-{ "seq": 17, "action": 51, "accepted": true }
+{
+  "cmd_id": "6f1f2c1e-8d1a-4c3b-9e77-0a1b2c3d4e5f",
+  "seq": 17,
+  "action": 51,
+  "accepted": true,
+  "status": "pending",
+  "transport": "ok"
+}
 ```
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `seq` | int | **1-250 循环**的序号，必须回填到串口帧里，设备应答时原样带回 |
+| `cmd_id` | string(uuid) | **命令主键，后端生成**。前端存进 pending 表，断线重连后用它查 `GET /api/commands/{id}` 对账 |
+| `seq` | int | **1-255 循环**（0 保留）的串口序号，必须回填到串口帧里，设备应答时原样带回。前端用它配对 `ack`，**不得当主键**（1 字节会回绕） |
 | `action` | int | 回显请求的动作码 |
 | `accepted` | bool | 是否已受理。`false` 前端也会进 pending 等 ack，所以建议只返回 `true`，失败直接用错误码 |
+| `status` | string | 受理那一刻恒为 `pending`，取值见 `CommandStatus` 六态 |
+| `transport` | string | `ok` / `write_failed` / `partial_write`，后端内部字段，前端不展示 |
 
-**关键约束（前端写死的行为）**
+**关键约束**
 
-1. 这个接口**必须立刻返回**（< 300ms），不能等设备 ack。前端拿到 `seq` 后自己起 3 秒计时器，等 WS 里的 `ack`。如果这里阻塞到 ack 才返回，等于把 3 秒预算吃掉了，按钮几乎必然标红。
-2. `seq` 要在 1-250 之间循环，**同一时刻不能有两个在用同一个 seq**。前端用 `pending[seq]` 配对 ack，撞号会把 A 的应答算到 B 头上。250 是前端 mock 的模数（`runtime.nextSeq()`），照做即可。
-3. 没有 `device_id` 字段，这是**故意的**：前端只接一条串口链路。后端按「当前唯一设备（id=1）」处理。将来要做多设备，需要改成 `/api/devices/{id}/commands`，两边同时改。
-4. 不管设备回没回，后端都要往 `command_log` 写一行：受理时 `PENDING`，之后更新成 `OK` / `TIMEOUT`（3 秒）/ `ERROR`。
+1. 这个接口**必须立刻返回**（< 300ms），落库后马上返回 `cmd_id` + `seq`，不能等设备 ack，更不能等动作跑完。设备应答由 WS `ack` 异步回推。
+2. **必须先返回 HTTP 响应，再推 WS `ack`**：前端是 `await sendCommand()` 之后才登记 `pending[seq]`，ack 早到会被当成迟到消息丢掉。实现上就是返回前 `await asyncio.sleep(0.05)`。
+3. `seq` 在 **1-255** 之间循环，**同一时刻不能有两个在用同一个 seq**。前端用 `pending[seq]` 配对 ack，撞号会把 A 的应答算到 B 头上。
+4. 没有 `device_id` 字段，这是**故意的**：前端只接一条串口链路，后端按「当前唯一设备（id=1）」处理。将来要做多设备，需要改成 `/api/devices/{id}/commands`，两边同时改。
+5. 设备离线**不拒绝**请求，照常受理，最终落 `TIMEOUT`。提前拒绝会丢掉一次本来可能成功的执行。
+6. 不管设备回没回，后端都要往 `command_log` 写一行：受理时 `PENDING`，之后更新成 `OK` / `TIMEOUT`（600ms 没等到 `0x81`）/ `ERROR`（`0x05` 或写串口失败）。
 
-**失败**：`code: 40002`，`message: "动作码不合法"`（比如传了 5.1 表里没有的码）。
+**失败**：`code: 40002`，`message: "动作码不合法"`（比如传了 5.1 表里没有的码）；`code: 50000` 串口写入失败；`code: 40400` 设备记录不存在。
 
 ---
 
-### 3.11 GET `/api/faces`
+### 3.11 GET `/api/commands/{id}`
+
+断线对账用：前端重连后，对本地仍是 pending 的命令**各查一次**，把丢失的终态补回来。
+
+这是 `events.md` §0「WS 只推已发生的事实，丢线之后靠快照重建、不靠补发」的直接推论：**服务端不回放历史事件**，事件漏了自己补终态。
+
+| 项 | 值 |
+|---|---|
+| 路径参数 | `id`：命令主键（UUID），即 `POST /api/commands/send` 返回的 `cmd_id` |
+| 调用时机 | 仅重连后对本地 pending 的命令查一次；**不要轮询**，一次最多 20 条 |
+| 不存在时 | `code: 40400` + `data: null`，不是 HTTP 404 |
+
+**响应 data**
+
+```json
+{
+  "cmd_id": "6f1f2c1e-8d1a-4c3b-9e77-0a1b2c3d4e5f",
+  "device_id": 1,
+  "action": 51,
+  "seq": 17,
+  "status": "done",
+  "transport": "ok",
+  "error_code": null,
+  "created_at": "2026-11-08T15:29:41+08:00",
+  "updated_at": "2026-11-08T15:29:42.312+08:00",
+  "finished_at": "2026-11-08T15:29:42.312+08:00"
+}
+```
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `status` | string | `pending` / `accepted` / `done` / `rejected` / `unknown` / `superseded`，**只由后端判定** |
+| `transport` | string | `ok` / `write_failed` / `partial_write` |
+| `error_code` | int | null | 仅 `status = rejected` 时非 null，取值见 `error-codes.md` §2 |
+| `finished_at` | string | null | 进入终态的时刻；未终结为 null |
+
+### 3.12 POST `/api/events/ticket`
+
+换 WebSocket 一次性票据。建连流程见第 4 章与 `events.md` §1。
+
+**为什么不能直接把 JWT 放 URL**：浏览器的 `new WebSocket()` 不能设置自定义请求头，只能把凭证塞进 query。URL 会进 access log、代理日志、浏览器历史，一个 24 小时有效的 JWT 落在那里等于长期凭证泄漏。
+
+**请求体**
+
+```json
+{ "device_id": 1 }
+```
+
+**响应 data**
+
+```json
+{ "ticket": "3f7c9a2e5b1d4c8f", "expires_in_sec": 30 }
+```
+
+**票据规则**
+
+| 项 | 值 |
+|---|---|
+| 有效期 | 30 秒 |
+| 使用次数 | 1 次，验过立即从票据池删除 |
+| 绑定 | `(user_id, device_id)`，换票的设备和建连的设备必须一致 |
+| 存储 | 进程内存 `dict[ticket] -> (user_id, device_id, expireAt)`，每次签发顺手扫一遍过期项 |
+| 进程重启 | 全部失效（不落库） |
+| 部署约束 | 必须单进程（与「串口唯一所有者」是同一条约束） |
+
+**失败**：`code: 40300` 没有该设备的访问权。
+
+---
+
+---
+
+### 3.13 GET `/api/faces`
 
 前端调用点：`api/face.ts → listFaces()`，表情页、监控台表情条。
 
@@ -526,7 +622,7 @@ ws://127.0.0.1:8000/ws/device?token=xxx&device_id=1
 
 ---
 
-### 3.12 POST `/api/faces`（上传自定义表情）
+### 3.14 POST `/api/faces`（上传自定义表情）
 
 前端调用点：`api/face.ts → uploadFace(file)`，表情页上传按钮。
 
@@ -553,7 +649,7 @@ ws://127.0.0.1:8000/ws/device?token=xxx&device_id=1
 
 ---
 
-### 3.13 POST `/api/faces/current`
+### 3.15 POST `/api/faces/current`
 
 前端调用点：`api/face.ts → setCurrentFace()`，表情页点一下、监控台点表情。
 
@@ -575,7 +671,7 @@ ws://127.0.0.1:8000/ws/device?token=xxx&device_id=1
 
 ---
 
-### 3.14 DELETE `/api/faces/{id}`
+### 3.16 DELETE `/api/faces/{id}`
 
 前端调用点：`api/face.ts → deleteFace()`。
 
@@ -588,7 +684,7 @@ ws://127.0.0.1:8000/ws/device?token=xxx&device_id=1
 
 ---
 
-### 3.15 GET `/api/logs`
+### 3.17 GET `/api/logs`
 
 前端调用点：`api/log.ts → listLogs()`，日志页（分页 + 双过滤）、看板（`size=200` 拉一次算成功率）。
 
@@ -642,7 +738,7 @@ ws://127.0.0.1:8000/ws/device?token=xxx&device_id=1
 
 ---
 
-### 3.16 GET `/api/telemetry`
+### 3.18 GET `/api/telemetry`
 
 前端调用点：`api/telemetry.ts → listTelemetry()`，看板电量曲线。
 
@@ -665,7 +761,7 @@ ws://127.0.0.1:8000/ws/device?token=xxx&device_id=1
 
 ---
 
-### 3.17 GET `/api/weather`
+### 3.19 GET `/api/weather`
 
 前端调用点：`api/weather.ts → getWeather()`，进监控台拉一次；之后 WS `weather` 事件更新。
 
@@ -703,7 +799,7 @@ ws://127.0.0.1:8000/ws/device?token=xxx&device_id=1
 
 ---
 
-### 3.18 GET `/api/scenes`
+### 3.20 GET `/api/scenes`
 
 前端调用点：`api/scene.ts → listScenes()`。
 
@@ -733,7 +829,7 @@ ws://127.0.0.1:8000/ws/device?token=xxx&device_id=1
 
 ---
 
-### 3.19 POST `/api/scenes`
+### 3.21 POST `/api/scenes`
 
 前端调用点：`api/scene.ts → createScene()`。
 
@@ -755,7 +851,7 @@ ws://127.0.0.1:8000/ws/device?token=xxx&device_id=1
 
 ---
 
-### 3.20 PUT `/api/scenes/{id}`
+### 3.22 PUT `/api/scenes/{id}`
 
 前端调用点：`api/scene.ts → updateScene()`，场景页保存按钮。
 
@@ -773,7 +869,7 @@ ws://127.0.0.1:8000/ws/device?token=xxx&device_id=1
 
 ---
 
-### 3.21 DELETE `/api/scenes/{id}`
+### 3.23 DELETE `/api/scenes/{id}`
 
 前端调用点：`api/scene.ts → deleteScene()`（页面先弹确认框，确认后才调）。
 
@@ -783,7 +879,7 @@ ws://127.0.0.1:8000/ws/device?token=xxx&device_id=1
 
 ---
 
-### 3.22 POST `/api/scenes/{id}/run`
+### 3.24 POST `/api/scenes/{id}/run`
 
 前端调用点：`api/scene.ts → runScene()`。
 
@@ -807,14 +903,28 @@ ws://127.0.0.1:8000/ws/device?token=xxx&device_id=1
 
 ### 4.1 连接
 
+两步，**JWT 不进 URL**：
+
 ```
-ws://127.0.0.1:8000/ws/device?token=<urlencode(token)>&device_id=1
+① POST /api/events/ticket     （Authorization: Bearer <token>，body {"device_id": 1}）
+   → data { "ticket": "...", "expires_in_sec": 30 }
+
+② ws://127.0.0.1:8000/ws/device?device_id=1&ticket=<ticket>
 ```
 
-- token 从 query 拿（浏览器的 WebSocket API 不能自定义 header，这不是偷懒，是唯一办法）。
-- 鉴权失败：**直接 `close(code=4001)`**。前端会自动重连（1 → 2 → 4 → 8 → 10 秒封顶），用户重新登录后 token 变了自然能连上。
+- 票据 30 秒有效、只能用一次、绑定 `(user_id, device_id)`，验过即焚；**每次重连都要重新换票**。
 - 前端**不会**给服务端发任何消息。所以后端不能设计成「等客户端 ping」——断线检测靠 TCP 关闭事件。
 - 建议服务端每 30 秒至少推一条 `state` 或 `link`，避免中间代理掐掉空闲连接；设备本来就 5 秒一条 `0x03`，正常情况不用额外造。
+
+**关闭码与重连策略**（详见 `events.md` §1.3）：
+
+| 关闭码 | 含义 | 前端行为 |
+|---|---|---|
+| `1000` | 正常关闭 | 不重连 |
+| `4001` | 缺参或格式错 | 不重连，报错 |
+| `4003` | 票据无效 / 过期 / 已用 | 重新取票再连 |
+| `4009` | 同用户同设备连接数超限（上限 3） | 提示后退避 5 秒 |
+| `1011` | 服务端内部错误 / 队列溢出 | 退避重连 1→2→4→8→10 秒封顶 |
 
 ### 4.2 消息格式
 
@@ -861,10 +971,13 @@ ws://127.0.0.1:8000/ws/device?token=<urlencode(token)>&device_id=1
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `seq` | int | 必须和 `POST /api/commands/send` 返回的 `seq` 一致 |
-| `status` | string | `OK` 或 `ERROR`（大写）。注意这里**没有** `TIMEOUT`——超时是前端自己判的 |
-| `cost_ms` | int | 实际耗时 |
+| `status` | string | `OK` 或 `ERROR`（大写）。这里**没有** `TIMEOUT`——超时由后端判定后写进 `command_log`，不走这条事件 |
+| `cost_ms` | int | 从下发到收到应答的实际耗时 |
+| `cmd_id` | string | 可选，命令主键。前端可以不读；需要断线对账时才用 |
 
-前端按 `seq` 认领（`stores/pet.ts → onAck`），**找不到对应 seq 的 ack 直接丢弃**。设备回 `0x81` 时如果连 `seq` 都没带回来，按钮永远停在黄色。
+**`ack` 是弱确认**：它只说明串口帧被受理了（等价于 `0x81`），不代表动作执行完成。动作的最终结果看 `command_log` 四态 `PENDING` → `OK` / `TIMEOUT` / `ERROR`。
+
+前端按 `seq` 认领（`stores/pet.ts → onAck`），**找不到对应 seq 的 ack 直接丢弃**。所以服务端必须保证 ack 晚于 HTTP 响应——见 8.1。
 
 #### `link` — 链路通断
 
@@ -924,7 +1037,7 @@ ws://127.0.0.1:8000/ws/device?token=<urlencode(token)>&device_id=1
 | 0x44 | 68 | 开灯 | 灯光 |
 | 0x45 | 69 | 关灯 | 灯光 |
 
-`0x46` / `0x47`（呼吸灯）**不在**这 19 个里，前端没有按钮，后端别加。
+`0x46` / `0x47`（开/关呼吸灯）**不在**这 19 个里：它们是 `frame.md` §6 里合法的协议动作码（`class=led`），但前端没有按钮、`CommandRequest.action` 枚举也不收，**接口层不接受这两个值**（传了返回 `40002 动作码不合法`）。将来做呼吸灯开关按钮，是三边一起改：本表 + `openapi.yaml` 的 `CommandRequest.action` + 前端 `constants/actions.ts`。
 
 ### 5.2 表情编号（内置 7 个）
 
@@ -975,11 +1088,13 @@ ws://127.0.0.1:8000/ws/device?token=<urlencode(token)>&device_id=1
 
 ## 6. REST ↔ 串口 对照
 
-给后端实现时对一下账号，**串口帧细节以后端计划第 6 章为准**，这里只说明「哪个接口对应哪一帧」：
+给后端实现时对一下账号，**串口帧细节以 `docs/contracts/frame.md` 为准**，这里只说明「哪个接口对应哪一帧」：
 
 | REST / WS | 串口帧 | 方向 |
 |---|---|---|
 | `POST /api/commands/send` | `0x01`（DATA 含动作码 + seq） | 下发 |
+| `POST /api/events/ticket` | 无（纯内存票据，不下发串口） | — |
+| `GET /api/commands/{id}` | 无（读 `command_log`） | — |
 | WS `ack` ← | `0x81` 受理 / `0x05` 等错误码 | 上报 |
 | `POST /api/faces/current` | `0x07`（DATA 表情编号） | 下发 |
 | `POST /api/devices/{id}/music` | `0x0A`（子命令 + 参数） | 下发 |
@@ -1008,6 +1123,8 @@ ws://127.0.0.1:8000/ws/device?token=<urlencode(token)>&device_id=1
 | 40900 | 200 | 冲突（注册用户名已存在等） | 弹 message |
 | 50000 | 200 | 服务内部错误 | 弹 message |
 
+这是**对外**的 9 个业务码，全部收敛在这里，不要再新造数字。设备侧的错误码（`0x05` 的 `DATA[0]`）和 `transport` 三态见 `error-codes.md`，它们不走 HTTP。
+
 `message` 是给用户看的中文，一句话，别带 `Exception`、别带堆栈、别带英文。
 
 **40900 的用法**：注册时用户名已存在统一用它，`message: "用户名已存在"`；不要新造 `40009` 之类的数字，前端只认 `message`，但错误码表要保持可查。
@@ -1029,18 +1146,18 @@ pending[seq] = { action, timer }           // ② 才登记
 
 `onAck` 里第一句是 `const item = pending[seq]; if (!item) return`。
 
-也就是说：**如果后端在 HTTP 响应之前（或同一瞬间）就把 ack 推到 WebSocket，前端还没登记这个 seq，ack 会被当成「迟到的」丢掉**，按钮 3 秒后标红，但设备其实动了——这是最难查的一类 bug。
+也就是说：**如果后端在 HTTP 响应之前（或同一瞬间）就把 ack 推到 WebSocket，前端还没登记这个 seq，ack 会被当成「迟到的」丢掉**，按钮最终标红，但设备其实动了——这是最难查的一类 bug。
 
 做法：`commands/send` 先把 `seq` 返回，**再**下发串口帧；或者至少在 `await asyncio.sleep(0.05)` 之后才允许推 ack。0.05 秒足够。
 
 ### 8.2 `commands/send` 不能等设备应答
 
-`send` 里 `await` 到设备 ack 才返回，等于把前端的 3 秒计时器吃掉大半。串口还可能因为设备没上电一直不返回，直接把 axios 的 10 秒超时踩爆，前端弹「网络异常」。
+`send` 里 `await` 到设备 ack 才返回，串口还可能因为设备没上电一直不返回，直接把 axios 的 10 秒超时踩爆，前端弹「网络异常」。而且前端的按钮反馈全废了。
 
 正确顺序：
 
 1. 生成 `seq`，写一条 `PENDING` 日志
-2. **立即返回** `{seq, action, accepted: true}`
+2. **立即返回** `{cmd_id, seq, action, accepted: true, status: "pending", transport: "ok"}`
 3. 后台任务下发串口帧、等应答、更新日志为 `OK`/`TIMEOUT`/`ERROR`、推 WS `ack` + `state`
 
 ---
@@ -1075,7 +1192,7 @@ pending[seq] = { action, timer }           // ② 才登记
 | 6 | 进监控台 | 状态区有电量/动作/表情 | `/api/devices/1/status`、WS 是否连上（查 Network → WS） |
 | 7 | 看时钟卡天气 | 地点「湘潭 · 雨湖区」，温度/文字和 Open-Meteo 当前值一致 | `/api/weather`、后端是否抓取并缓存、WS `weather` |
 | 8 | 点「前进」 | 按钮黄 → 绿（≤3 秒） | 见 8.1 / 8.2 |
-| 9 | 连点 5 个不同动作 | 5 个都变绿，不串号 | `seq` 是否 1-250 循环且不撞 |
+| 9 | 连点 5 个不同动作 | 5 个都变绿，不串号 | `seq` 是否 1-255 循环且不撞 |
 | 10 | 音乐面板点播放 | 状态变「播放中」，音量条能动 | WS `music` 事件是否推、DFPlayer 是否有 TF 卡 |
 | 11 | 表情页点「生气」 | 设备屏幕换脸，页面高亮 | `/api/faces/current` + WS `state.face` |
 | 12 | 表情页上传 512 字节图 | 列表多一张，可删 | multipart 字段名必须是 `file`、`preview` 是否匿名可 GET |
@@ -1173,7 +1290,7 @@ code: int              text: string       temp: int          updated_at: string
 location?: string      source?: string
 ```
 
-`location` / `source` 是 V1.1 新增的可选展示字段，不返回时前端兜底「湘潭 · 雨湖区」。
+`location` / `source` 是可选展示字段，不返回时前端兜底显示「湘潭 · 雨湖区」。
 
 ### LoginResult / User / RegisterResult
 
@@ -1194,11 +1311,14 @@ name: string           1-20 个字符，PATCH /api/devices/{id} 的请求体
 ```
 { event: 'state',   data: StateData }    // battery, voltage, action, face,
                                          // music_state, track, weather_code, temp
-{ event: 'ack',     data: { seq, status: 'OK'|'ERROR', cost_ms } }
+{ event: 'ack',     data: { cmd_id?: string, seq: int,
+                            status: 'OK'|'ERROR', cost_ms: int } }
 { event: 'link',    data: { online: bool } }
 { event: 'music',   data: { state: int, track: int, volume?: int } }
 { event: 'weather', data: { code: int, text: string, temp: int } }
 ```
+
+WS 的信封是扁平的 `{ event, data }`，**没有** `eventId` / `ts` / `deviceId`，也没有 ping 与 snapshot；事件只有上面这五种。`ack` 是弱确认（等价串口 0x81），命令的最终结果看 `command_log` 的 OK/TIMEOUT/ERROR/PENDING。事件语义、合并规则、背压与重连策略见 `docs/contracts/events.md`。
 
 ---
 
@@ -1208,5 +1328,6 @@ name: string           1-20 个字符，PATCH /api/devices/{id} 的请求体
 |---|---|---|
 | V1.0 | 2026-11-08 | 首次冻结。前端代码已按此实现，共 20 个 HTTP + 1 条 WS；补上文档里此前没定死的 8 条（场景增删改、表情删除与切换、天气），并明确 `/commands/send` 的时序、`/faces/current` 是切表情唯一入口 |
 | V1.1 | 2026-11-08 | 前端新增登录页注册、设备页改名 + Q 版挂件后同步契约：新增 `POST /api/auth/register`、`PATCH /api/devices/{id}`，共 22 个 HTTP + 1 条 WS；`WeatherInfo` 增加可选 `location` / `source` 并明确湘潭雨湖区 Open-Meteo 缓存策略；明确 `preview` 必须匿名可 GET；新增 §2.1「页面已实现、后端待落地」清单；修正联调地址为 `localhost` |
+| V2.0 | 2026-11-08 | 合并 V1.1（前端反向导出）与 V1.0（`docs/contracts` 原稿），确立唯一一套契约。**判为错误的删掉**：`lastFrameAt`→`last_heartbeat`、驼峰 `DeviceSnapshot`→snake_case `DeviceStatus`、`updatedAt`→`updated_at`、`User.role` 的 `viewer`→`user`、`/faces/current` 的 PUT→POST、`/faces` multipart 的 required `name` 去掉、`MusicRequest{subcommand,parameter}`→`{command,value}`、`MusicResult{dispatched}`→`{ok,state,track,volume}`、`/scenes/{id}/run` 的 `{runId,totalSteps}`→`{steps}`、错误码 40003/40901/50301/50302 并入 40002/40900/50000、`/commands/active` 删除（改用 `/logs` 最新一条）。**从 V1.0 补回**：`cmd_id` 与 `GET /api/commands/{id}` 断线对账、`POST /api/events/ticket` 一次性票据（禁 JWT 进 URL）、`CommandStatus` 六态 + `TransportStatus` 三态、`/logs` 的 page/size 可选、`/health` 加 `version`、`/telemetry` 加可选 `minutes`。全库字段与 query 统一 snake_case。共 24 个 HTTP + 1 条 WS |
 
 改动流程：先改本文件 + `openapi.yaml`，群里说一声，再各自改代码。

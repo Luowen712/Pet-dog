@@ -1,6 +1,7 @@
 import type { AxiosRequestConfig } from 'axios'
 import type {
   CommandLog,
+  CommandReceipt,
   CommandState,
   Device,
   FaceItem,
@@ -270,6 +271,15 @@ function saveSession(session: { username: string; name: string; role: string }):
   localStorage.setItem(MOCK_SESSION_KEY, JSON.stringify(session))
 }
 
+/** mock 的命令记录：断线对账要走 GET /commands/{id} */
+const receipts = new Map<string, CommandReceipt>()
+let cmdAutoId = 0
+
+function newCmdId(): string {
+  cmdAutoId += 1
+  return `mock-cmd-${String(cmdAutoId).padStart(6, '0')}`
+}
+
 /* ------------------------------- 路由 ------------------------------- */
 
 export async function matchMock(config: AxiosRequestConfig): Promise<MockHit> {
@@ -280,6 +290,15 @@ export async function matchMock(config: AxiosRequestConfig): Promise<MockHit> {
 
   if (method === 'get' && path === '/health') {
     return hit({ status: 'ok', mode: 'mock' })
+  }
+
+  /* WS 票据：mock 下不校验内容，只要 shape 对就行 */
+  if (method === 'post' && path === '/events/ticket') {
+    const deviceId = Number(body.device_id ?? 1)
+    return hit({
+      ticket: `mock-ticket-${now().toString(36)}-${deviceId}`,
+      expires_in_sec: 30,
+    })
   }
 
   /* 认证 */
@@ -372,14 +391,16 @@ export async function matchMock(config: AxiosRequestConfig): Promise<MockHit> {
   if (method === 'post' && path === '/commands/send') {
     const action = Number(body.action)
     if (!Number.isFinite(action)) throw new ApiError(40002, '动作码不合法')
+    const cmdId = newCmdId()
     const seq = runtime.nextSeq()
     const startedAt = now()
+    const createdAt = iso()
     runtime.action = action
 
     const log: CommandLog = {
       id: ++logAutoId,
       device_id: 1,
-      time: iso(),
+      time: createdAt,
       action,
       action_name: actionName(action),
       status: 'PENDING',
@@ -389,17 +410,42 @@ export async function matchMock(config: AxiosRequestConfig): Promise<MockHit> {
     }
     logs.unshift(log)
 
+    const receipt: CommandReceipt = {
+      cmd_id: cmdId,
+      device_id: 1,
+      action,
+      seq,
+      status: 'pending',
+      transport: 'ok',
+      error_code: null,
+      created_at: createdAt,
+      updated_at: createdAt,
+      finished_at: null,
+    }
+    receipts.set(cmdId, receipt)
+
     setTimeout(() => {
       const cost = now() - startedAt
       log.status = 'OK'
       log.cost_ms = cost
       log.response = '0x81 受理 / 0x02 完成'
-      runtime.emit({ event: 'ack', data: { seq, status: 'OK', cost_ms: cost } })
+      receipt.status = 'done'
+      receipt.updated_at = iso()
+      receipt.finished_at = receipt.updated_at
+      runtime.emit({ event: 'ack', data: { cmd_id: cmdId, seq, status: 'OK', cost_ms: cost } })
       runtime.emit({ event: 'state', data: runtime.snapshot() })
     }, 520 + Math.floor(Math.random() * 620))
 
     runtime.emit({ event: 'state', data: runtime.snapshot() })
-    return hit({ seq, action, accepted: true })
+    return hit({ cmd_id: cmdId, seq, action, accepted: true, status: 'pending', transport: 'ok' })
+  }
+
+  const commandMatch = path.match(/^\/commands\/([^/]+)$/)
+  if (method === 'get' && commandMatch) {
+    const receipt = receipts.get(decodeURIComponent(commandMatch[1]))
+    // 契约：记录不存在是 code 40400 + data null，不是 HTTP 404
+    if (!receipt) throw new ApiError(40400, '命令记录不存在')
+    return hit(receipt)
   }
 
   /* 音乐 */

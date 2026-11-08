@@ -2,15 +2,16 @@ openapi: 3.0.3
 
 info:
   title: Pet-dog 桌宠控制台 API
-  version: 1.1.0
+  version: 2.0.0
   description: |
-    STM32 智能桌面宠物的前后端接口契约 V1.1（PET-API-V1.1）。
+    STM32 智能桌面宠物的前后端接口契约 v2.0（PET-API-V2.0）。
 
-    本文件由前端已完成代码反向导出，字段名与路径均为冻结状态。
-    人读版说明见 `docs/STM32智能桌面宠物_前后端接口契约_V1.1.md`。
+    本文件是**唯一**机器可读契约；人读版 `docs/contracts/http-api.md`，
+    串口帧 `docs/contracts/frame.md`，WS 事件 `docs/contracts/events.md`，
+    错误码 `docs/contracts/error-codes.md`，超时表 `docs/contracts/action-timing.md`。
+    五份文件同属 `docs/contracts/`，是本项目的唯一真源。
 
-    V1.1 新增：注册 `POST /api/auth/register`、设备改名 `PATCH /api/devices/{id}`；
-    `WeatherInfo` 增加可选的 `location` / `source`；明确表情 `preview` 必须可匿名 GET。
+    v2.0 = V1.1（前端反向导出）+ V1.0（docs/contracts 原稿）合并结果，取舍见 http-api.md 变更记录。
 
     ## 三条必须遵守的约定
 
@@ -18,25 +19,46 @@ info:
        `code = 0` 表示成功。
     2. 业务失败用 HTTP 200 + 非 0 `code`（前端直接弹 `message`）；
        只有登录态失效才用 HTTP 401 + `code: 40101`（前端据此清登录态跳登录页）。
-    3. `POST /api/commands/send` 必须立即返回，不能等设备应答；
+    3. `POST /api/commands/send` 必须立即返回（<300ms），不能等设备应答；
        设备应答通过 WebSocket 的 `ack` 事件回推，且必须晚于 HTTP 响应。
+    4. 命令是有生命周期的实体，主键是 `cmd_id`（UUID，后端生成，受理即返回）。
+       `seq` 只是串口序号（1-255 循环），供日志排查与 WS `ack` 配对，
+       **前端不得用 `seq` 做命令主键**。
+    5. **所有 JSON 字段名、查询参数名统一 snake_case**（`device_id`、`updated_at`、
+       `music_state`）。HTTP 路径里的占位符写 `{id}`，不写 `{device_id}`。
 
     ## WebSocket
 
-    `ws://127.0.0.1:8000/ws/device?token=<urlencode>&device_id=1`
-    服务端单向推送纯文本 JSON 帧，一条消息一个事件：
+    先换一次性票据，再建连（**不要把 JWT 放进 URL**）：
+
+    1. `POST /api/events/ticket`，带 `Authorization: Bearer <token>`，body `{"device_id": 1}`
+       → `data: {"ticket": "...", "expires_in_sec": 30}`
+    2. `ws://127.0.0.1:8000/ws/device?device_id=1&ticket=<ticket>`
+
+    票据 30 秒有效、只能用一次、绑定 (user_id, device_id)，用完即焚；重连必须重新换票。
+
+    服务端单向推送纯文本 JSON 帧，一条消息一个事件，扁平信封 `{event, data}`：
 
     ```json
     {"event": "state",   "data": {"battery": 78, "voltage": 3.92, "action": 51,
                                   "face": 0, "music_state": 0, "track": 3,
                                   "weather_code": 0, "temp": 23}}
-    {"event": "ack",     "data": {"seq": 17, "status": "OK", "cost_ms": 312}}
+    {"event": "ack",     "data": {"seq": 17, "status": "OK", "cost_ms": 312,
+                                  "cmd_id": "6f1f2c1e-8d1a-4c3b-9e77-0a1b2c3d4e5f"}}
     {"event": "link",    "data": {"online": true}}
     {"event": "music",   "data": {"state": 1, "track": 3, "volume": 15}}
     {"event": "weather", "data": {"code": 0, "text": "晴", "temp": 23}}
     ```
 
-    鉴权失败直接 `close(code=4001)`。前端不会给服务端发任何消息，也没有客户端心跳。
+    只有这五种事件，没有其它。`ack` 是**弱确认**：`status` 只有 `OK` / `ERROR` 两值，
+    表示串口帧是否被受理，不代表动作执行完成；动作的最终结果看 `command_log` 四态
+    （`PENDING` → `OK` / `TIMEOUT` / `ERROR`）。
+    `cmd_id` 是后端推回来的命令主键，前端可以不读；需要断线对账时用它查
+    `GET /api/commands/{id}`。
+
+    关闭码：`1000` 正常、`4001` 缺参或格式错、`4003` 票据无效/过期/已用、
+    `4009` 同用户同设备连接超限（上限 3）、`1011` 服务端错误。
+    前端不会给服务端发任何消息，也没有客户端心跳。
 
     ## 业务错误怎么读
 
@@ -82,12 +104,13 @@ paths:
                       data:
                         type: object
                         properties:
-                          status: { type: string, example: ok }
-                          mode: { type: string, example: serial }
+                          status: { type: string, description: 固定 ok，进程活着就返回它, example: ok }
+                          mode: { type: string, description: serial = 真串口；mock = 内存假数据, example: serial }
+                          version: { type: string, description: 后端版本号，与 /docs 头部一致, example: 2.0.0 }
               example:
                 code: 0
                 message: ok
-                data: { status: ok, mode: serial }
+                data: { status: ok, mode: serial, version: 2.0.0 }
                 timestamp: 1762587000000
 
   /api/auth/login:
@@ -388,16 +411,23 @@ paths:
       description: |
         前端：`src/api/command.ts → sendCommand()`，监控台 19 个动作按钮与场景执行都走这里。
 
-        ### 时序硬要求
-        - **立即返回**（<300ms），不能等设备 ack；前端拿到 seq 后自己起 3 秒计时器。
-        - 必须**先返回 HTTP 响应，再推 WS `ack`**：前端是在 `await sendCommand()` 之后才把
+        ### 时序硬要求（最容易翻车的一处）
+        - **立即返回**（<300ms）：落库后立刻返回 `cmd_id` + `seq`，不等设备应答，
+          更不等动作跑完。设备应答由 WS `ack` 异步回推。
+        - 必须**先返回 HTTP 响应，再推 WS `ack`**：前端在 `await sendCommand()` 之后才把
           `pending[seq]` 登记上，ack 早到会被当成迟到消息丢弃，按钮会误标红。
-        - `seq` 在 1-250 循环，同一时刻不能有两个在用的 seq（前端用 seq 做配对键）。
+          后端实现上就是 `await asyncio.sleep(0.05)` 之后再推第一帧。
+        - `seq` 在 **1-255** 循环（0 保留），同一时刻不能有两帧用同一个 seq。
+          前端用 seq 做 ack 配对键，但命令主键始终是 `cmd_id`。
 
         ### 其它
         - 没有 `device_id` 字段是故意的：单串口链路，后端按当前唯一设备（id=1）处理。
-        - 无论设备是否应答，都要写 `command_log`：受理时 PENDING，之后更新为
-          OK / TIMEOUT(3s) / ERROR。
+        - 设备离线**不拒绝**请求，照常受理（离线命令最终落 `TIMEOUT`）。
+          提前拒绝会丢掉一次本来可能成功的执行。
+        - 无论设备是否应答，都要写 `command_log`：受理时 `PENDING`，之后更新为
+          `OK` / `TIMEOUT`（`T_ACK_MS` = 600ms 没等到 0x81 受理）/ `ERROR`（收到 0x05 或写串口失败）。
+        - `cmd_id` 由后端生成并在响应里返回；前端把它存进 pending 表，
+          断线重连后用它查 `GET /api/commands/{id}` 对账。
       requestBody:
         required: true
         content:
@@ -417,12 +447,127 @@ paths:
               example:
                 code: 0
                 message: ok
-                data: { seq: 17, action: 51, accepted: true }
+                data:
+                  cmd_id: 6f1f2c1e-8d1a-4c3b-9e77-0a1b2c3d4e5f
+                  seq: 17
+                  action: 51
+                  accepted: true
+                  status: pending
+                  transport: ok
                 timestamp: 1762587000000
         default:
           $ref: '#/components/responses/BusinessError'
         x-business-errors:
           - { code: 40002, message: 业务校验失败，message 直接展示给用户 }
+          - { code: 50000, message: 串口写入失败，命令未下发 }
+          - { code: 40400, message: 设备不存在（库里没有 id=1 的记录） }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/commands/{id}:
+    get:
+      tags: [指令]
+      summary: 按 cmd_id 查单条命令状态（断线对账用）
+      description: |
+        前端：断线重连后（先按 events.md §7 拉一次设备 status），对本地仍为 pending 的命令
+        **各查一次**，把丢失的终态补回来。只补本地有记录的，不轮询，最多 20 条。
+
+        不存在时返回 `code: 40400` 且 `data: null`，不是 HTTP 404。
+        注意：这里**不回放历史事件**，只给你当前状态——事件丢了自己补终态，
+        这是 events.md §0「丢线之后靠 HTTP 重建，不靠补发」的直接推论。
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: 命令主键（UUID），由 POST /api/commands/send 返回
+          schema: { type: string, format: uuid, example: 6f1f2c1e-8d1a-4c3b-9e77-0a1b2c3d4e5f }
+      responses:
+        '200':
+          description: 命令回执，或 code=40400 + data=null
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/CommandReceipt'
+                        nullable: true
+              example:
+                code: 0
+                message: ok
+                data:
+                  cmd_id: 6f1f2c1e-8d1a-4c3b-9e77-0a1b2c3d4e5f
+                  device_id: 1
+                  action: 51
+                  seq: 17
+                  status: done
+                  transport: ok
+                  error_code: null
+                  created_at: '2026-11-08T15:29:41+08:00'
+                  updated_at: '2026-11-08T15:29:42.312+08:00'
+                  finished_at: '2026-11-08T15:29:42.312+08:00'
+                timestamp: 1762587000000
+        default:
+          $ref: '#/components/responses/BusinessError'
+        x-business-errors:
+          - { code: 40400, message: 命令不存在，data 为 null }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/events/ticket:
+    post:
+      tags: [系统]
+      summary: 换取 WebSocket 一次性票据
+      description: |
+        ## 为什么需要它
+        浏览器的 `new WebSocket()` **不能**设置自定义请求头，所以没法带 `Authorization: Bearer`。
+        把长期 JWT 放进 URL 查询参数（`/ws/device?token=<JWT>`）会进 access log、
+        代理日志、浏览器历史——等于长期凭证泄漏。
+
+        改为：先用带 Bearer 头的 HTTP 请求换一张 30 秒有效、一次性、绑定 (user_id, device_id)
+        的票据，再用 `/ws/device?device_id=1&ticket=<ticket>` 建连。票据验过即删，
+        重连必须重新换票。
+
+        ## 票据规则
+        - 有效期 30 秒，使用次数 1 次
+        - 绑定 (user_id, device_id)，换票的设备和建连的设备必须一致
+        - 存内存 `dict[ticket] -> (user_id, device_id, expireAt)`，每次签发顺手扫一遍过期项
+        - 进程重启后全部失效（不落库）
+        - 服务端必须单进程跑（与串口唯一所有者同一个约束）
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [device_id]
+              properties:
+                device_id: { type: integer, example: 1 }
+      responses:
+        '200':
+          description: data = WsTicket
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/WsTicket' }
+              example:
+                code: 0
+                message: ok
+                data: { ticket: 3f7c9a2e5b1d4c8f, expires_in_sec: 30 }
+                timestamp: 1762587000000
+        default:
+          $ref: '#/components/responses/BusinessError'
+        x-business-errors:
+          - { code: 40300, message: 没有该设备的访问权 }
         '401':
           $ref: '#/components/responses/Unauthorized'
 
@@ -598,14 +743,14 @@ paths:
       parameters:
         - name: page
           in: query
-          required: true
-          description: 页码，从 1 开始
+          required: false
+          description: 页码，从 1 开始；不传取 1
           schema: { type: integer, minimum: 1, default: 1, example: 1 }
         - name: size
           in: query
-          required: true
-          description: 每页条数，日志页 10/20/50，看板 200
-          schema: { type: integer, minimum: 1, maximum: 200, default: 10, example: 10 }
+          required: false
+          description: 每页条数，日志页 10/20/50，看板 200；不传取 20，上限 200
+          schema: { type: integer, minimum: 1, maximum: 200, default: 20, example: 10 }
         - name: status
           in: query
           required: false
@@ -658,8 +803,14 @@ paths:
         前端：`src/api/telemetry.ts → listTelemetry()`，看板电量曲线。
 
         - **按时间升序**（最旧 → 最新），顺序反了曲线就是倒着走的。
-        - 建议最近 24 小时每小时 1 条，共 24 条。
+        - 默认最近 24 小时、每小时 1 条，共 24 条（前端不传 `minutes`，走默认值）。
         - 少于 2 条前端画出来是空白，库里没数据时最好也返回当前值。
+      parameters:
+        - name: minutes
+          in: query
+          required: false
+          description: 回溯分钟数，可选；不传取 1440（24 小时）
+          schema: { type: integer, minimum: 1, maximum: 1440, default: 1440, example: 1440 }
       responses:
         '200':
           description: 遥测点数组
@@ -958,7 +1109,11 @@ components:
       properties:
         username: { type: string, example: admin }
         name: { type: string, description: 显示名, example: 管理员 }
-        role: { type: string, description: 'admin / viewer，前端只展示不校验', example: admin }
+        role:
+          type: string
+          enum: [user, admin]
+          description: 只有这两个值；前端只展示不校验。缺省 user
+          example: admin
 
     LoginResult:
       type: object
@@ -1076,18 +1231,101 @@ components:
             - 69   # 0x45 关灯
           example: 51
 
+    CommandStatus:
+      type: string
+      enum: [pending, accepted, done, rejected, unknown, superseded]
+      description: |
+        命令生命周期状态，**只由后端判定**，前端只显示不判定（前端不得自判超时）。
+        - pending：已受理，尚未写串口
+        - accepted：设备回了 0x81 受理应答
+        - done：设备回了 0x02 完成应答
+        - rejected：设备回了 0x05，或串口写入失败
+        - unknown：超过 `T_ACK_MS`（600ms）没等到 0x81，最终判定失败
+        - superseded：新命令已被受理，这条旧命令作废
+      example: pending
+
+    TransportStatus:
+      type: string
+      enum: [ok, write_failed, partial_write]
+      description: |
+        串口传输层的发送结果，后端内部字段，前端不需要展示。
+        - ok：整帧写完
+        - write_failed：一字节都没写出去
+        - partial_write：只写出一部分（串口异常断开），按失败处理
+      example: ok
+
     CommandAccepted:
       type: object
-      required: [seq, action, accepted]
+      required: [cmd_id, seq, action, accepted, status, transport]
       properties:
+        cmd_id:
+          type: string
+          format: uuid
+          description: |
+            命令主键，后端生成，受理即返回。前端存进 pending 表；
+            断线重连后用 `GET /api/commands/{id}` 对账。
+          example: 6f1f2c1e-8d1a-4c3b-9e77-0a1b2c3d4e5f
         seq:
           type: integer
           minimum: 1
-          maximum: 250
-          description: 1-250 循环，需回填到串口帧并原样出现在 WS ack 里
+          maximum: 255
+          description: |
+            串口序号，1-255 循环（0 保留），需回填到串口帧并原样出现在 WS `ack` 里。
+            前端用它做 ack 配对键，**不得用它做命令主键**（1 字节会回绕）。
           example: 17
-        action: { type: integer, example: 51 }
-        accepted: { type: boolean, example: true }
+        action: { type: integer, description: 十进制动作码, example: 51 }
+        accepted:
+          type: boolean
+          description: 是否已受理并落库。true = 已受理，后续结果看 WS ack 与 command_log
+          example: true
+        status: { $ref: '#/components/schemas/CommandStatus' }
+        transport: { $ref: '#/components/schemas/TransportStatus' }
+
+    CommandReceipt:
+      type: object
+      description: |
+        命令的完整回执，`GET /api/commands/{id}` 返回它，断线重连对账用。
+        前端只在重连后对本地仍为 pending 的命令查一次，不要轮询。
+      required: [cmd_id, device_id, action, status, transport, created_at, updated_at]
+      properties:
+        cmd_id: { type: string, format: uuid, example: 6f1f2c1e-8d1a-4c3b-9e77-0a1b2c3d4e5f }
+        device_id: { type: integer, example: 1 }
+        action: { type: integer, description: 十进制动作码, example: 51 }
+        seq:
+          type: integer
+          nullable: true
+          minimum: 1
+          maximum: 255
+          description: 后端分配的串口序号；写串口就失败时可能为 null
+          example: 17
+        status: { $ref: '#/components/schemas/CommandStatus' }
+        transport: { $ref: '#/components/schemas/TransportStatus' }
+        error_code:
+          type: integer
+          nullable: true
+          description: 仅 status=rejected 时非 null，取值见 error-codes.md 的设备错误码 0x05 DATA[0]
+          example: null
+        created_at: { type: string, format: date-time, example: '2026-11-08T15:29:41+08:00' }
+        updated_at: { type: string, format: date-time, example: '2026-11-08T15:29:41.312+08:00' }
+        finished_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: 进入终态（done/rejected/unknown/superseded）的时刻，未终结时为 null
+          example: '2026-11-08T15:29:41.312+08:00'
+
+    WsTicket:
+      type: object
+      required: [ticket, expires_in_sec]
+      properties:
+        ticket:
+          type: string
+          description: 一次性票据，30 秒有效，绑定 (user_id, device_id)，验过即从票据池删除
+          example: 3f7c9a2e5b1d4c8f
+        expires_in_sec:
+          type: integer
+          description: 有效期秒数，固定 30
+          example: 30
 
     MusicRequest:
       type: object
@@ -1144,7 +1382,7 @@ components:
           enum: [OK, TIMEOUT, ERROR, PENDING]
           description: 四个值固定大写，前端据此上色
           example: OK
-        cost_ms: { type: integer, description: 下发到应答的毫秒数；超时给 3000 左右；PENDING 给 0, example: 312 }
+        cost_ms: { type: integer, description: 下发到应答的毫秒数；TIMEOUT 给 T_ACK_MS（600）左右；PENDING 给 0, example: 312 }
         seq: { type: integer, example: 17 }
         response: { type: string, description: 原始应答摘要，给人看, example: 0x81 受理 / 0x02 完成 }
 

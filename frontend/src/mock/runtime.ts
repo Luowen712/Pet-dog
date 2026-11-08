@@ -29,8 +29,9 @@ class MockRuntime {
     this.listeners.forEach((listener) => listener(event))
   }
 
+  /** 契约：seq 在 1-255 循环（0 保留），同一时刻不能有两条命令用同一个 seq */
   nextSeq(): number {
-    this.seq = (this.seq % 250) + 1
+    this.seq = (this.seq % 255) + 1
     return this.seq
   }
 

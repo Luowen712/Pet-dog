@@ -37,7 +37,7 @@ function stateOf(code: number): ButtonState {
       <div class="legend">
         <span class="lg"><i class="sw pending" />已发</span>
         <span class="lg"><i class="sw ok" />成功</span>
-        <span class="lg"><i class="sw fail" />超时 / 失败</span>
+        <span class="lg"><i class="sw fail" />无回执 / 失败</span>
       </div>
     </div>
 

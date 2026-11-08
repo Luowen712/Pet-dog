@@ -122,7 +122,7 @@ async function submitRename(): Promise<void> {
 
         <div class="foot">
           <span class="heart mono">{{ formatDateTime(device.last_heartbeat) }}</span>
-          <el-button class="enter" :disabled="!device.online" @click="enter(device)">
+          <el-button class="enter" @click="enter(device)">
             进入控制台 <span class="arrow">↗</span>
           </el-button>
         </div>
