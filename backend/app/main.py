@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from app import models  # noqa: F401  必须留着，否则一张表都不建
 from app.db import Base, engine
 from app.errors import register_handlers
+from app.resp import ok
 from app.routers import auth, devices
 
 Base.metadata.create_all(bind=engine)
@@ -29,7 +30,7 @@ register_handlers(app)
 
 # 把 app/static 挂成 /static，里面的文件就能用网址直接访问
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
-app.include_router(devices.router)  # ← 新增
+app.include_router(devices.router)  
 
 # 把 auth 路由挂到应用上：/api/auth/login、/api/auth/me
 app.include_router(auth.router)
@@ -48,9 +49,4 @@ def custom_docs():
 
 @app.get("/api/health")
 def health():
-    return {"code": 0, "message": "ok", "data": {"version": "2.0.0"}, "timestamp": 0}
-
-
-@app.get("/api/ping")
-def ping():
-    return {"msg": "我改了"}
+    return ok({"status": "ok", "mode": "serial"})
