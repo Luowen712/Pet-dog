@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.deps import current_user
 from app.models import Device, Telemetry
+from app.resp import fail, ok
 
 router = APIRouter(prefix="/api/devices", tags=["设备"])
 
@@ -36,4 +37,4 @@ def list_devices(user: dict = Depends(current_user), db: Session = Depends(get_d
         battery = latest.battery if latest and latest.battery is not None else 0
         data.append(device_out(d, battery))
 
-    return {"code": 0, "message": "ok", "data": data, "timestamp": 0}
+    return ok(data)
