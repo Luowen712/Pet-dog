@@ -273,7 +273,8 @@ onBeforeUnmount(() => {
 }
 
 .g17 {
-  left: 17%;
+  /* 对上标题「DESKTOP」里 D 的字形左缘，再往左留 5px */
+  left: max(62px, calc(50% - 558px));
 }
 
 .g50 {
