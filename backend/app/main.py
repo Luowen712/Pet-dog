@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app import models  # noqa: F401  必须留着，否则一张表都不建
 from app.db import Base, engine
+from app.errors import register_handlers
 from app.routers import auth, devices
 
 Base.metadata.create_all(bind=engine)
@@ -23,6 +24,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+register_handlers(app)  
 
 # 把 app/static 挂成 /static，里面的文件就能用网址直接访问
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
