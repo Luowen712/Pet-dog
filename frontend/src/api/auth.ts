@@ -15,8 +15,8 @@ export function login(username: string, password: string): Promise<LoginResult> 
 }
 
 /**
- * 注册：接口路径文档里没定死，暂按 /auth/register 写。
- * 好在这条只需两头对上，后端 /docs 一出来改这里一处就行。
+ * 注册：只建账号、不签发 token，成功后前端切回登录页。
+ * 契约见 docs/contracts/http-api.md §3.3。
  */
 export function register(username: string, password: string): Promise<RegisterResult> {
   return request<RegisterResult>({
