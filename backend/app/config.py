@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     WEATHER_LON: float = 116.40
     WEATHER_CITY: str = "北京"
     ONLINE_TTL_SEC: int = 30
+    DEV_HEARTBEAT: bool = False
 
 
 settings = Settings()

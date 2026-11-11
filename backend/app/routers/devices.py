@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends  # 路由容器 + 依赖注入标记
 from pydantic import BaseModel  # 声明请求体的形状
 from sqlalchemy.orm import Session  # 类型标注用，运行时不做任何事
 
+from app.config import settings #配置（DEV_HEARTBEAT开关）
 from app.db import get_db  # Session 工厂（依赖）
 from app.deps import current_user  # 登录校验（依赖）
 from app.models import Device, Telemetry  # 两张表的映射类
@@ -198,20 +199,17 @@ def control_music(
         {"ok": True, "state": st["state"], "track": st["track"], "volume": st["volume"]}
     )
 
+if settings.DEV_HEARTBEAT:
+    class HeartbeatIn(BaseModel):
+        device_id: str
 
-class HeartbeatIn(BaseModel):
-    device_id: str
-    battery: int | None = None
-    action: int | None = None
-
-
-@router.post("/heartbeat")
-def heartbeat(body: HeartbeatIn, db: Session = Depends(get_db)):
-    d = db.query(Device).filter(Device.device_id == body.device_id).first()
-    if not d:
-        return fail(40400, "设备不存在")
-    d.last_seen = datetime.now()
-    db.commit()
-    return ok(
-        {"device_id": d.id, "online": True, "last_heartbeat": to_iso(d.last_seen)}
-    )
+    @router.post("/heartbeat")
+    def heartbeat(body: HeartbeatIn, db: Session = Depends(get_db)):
+        d = db.query(Device).filter(Device.device_id == body.device_id).first()
+        if not d:
+            return fail(40400, "设备不存在")
+        d.last_seen = datetime.now()
+        db.commit()
+        return ok(
+            {"device_id": d.id, "online":True, "last_heartbeat": to_iso(d.last_seen)}
+        )
