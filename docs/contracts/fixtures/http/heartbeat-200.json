@@ -1,0 +1,18 @@
+{
+  "id": "http.devices.heartbeat.200",
+  "method": "POST",
+  "path": "/api/devices/heartbeat",
+  "http_status": 200,
+  "rule": "06:280 开发期临时接口，DEV_HEARTBEAT 默认关闭；last_heartbeat 带 +08:00",
+  "response": "HeartbeatResponse",
+  "body": {
+    "code": 0,
+    "message": "ok",
+    "timestamp": 1731210000000,
+    "data": {
+      "device_id": 1,
+      "online": true,
+      "last_heartbeat": "2026-11-11T20:21:04+08:00"
+    }
+  }
+}

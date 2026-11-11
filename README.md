@@ -14,7 +14,7 @@
 - [跨组接口与状态规则](docs/plan/06_跨组接口与状态规则.md)
 
 plan只保留这七份执行文件。原Word、V3和旧契约已移入[历史归档](docs/archive/2026-11-10_pre-v3.1/)，不与当前计划并行执行。
-J00按共享规则生成OpenAPI和固定测试向量到docs/contracts，当前尚未生成；组员无需等待另一轮架构讨论，先按任务00清点并生成样例。
+J00已按共享规则把机器契约落到 [docs/contracts](docs/contracts/README.md)：`openapi.yaml`（20 条路径 / 22 个响应 schema）+ 22 个 HTTP、8 个 WS、12 个帧样例。它们必须与06一致，校验命令 `backend\.venv\Scripts\python.exe backend\tools\check_contracts.py`（ERROR 退出码1）。
 
 ## 仓库结构
 
@@ -25,7 +25,7 @@ J00按共享规则生成OpenAPI和固定测试向量到docs/contracts，当前�
 | firmware/ | 固件工程、协议、动作、表情与状态 |
 | hardware/ | 接线、供电、校准、装配和PCB |
 | docs/plan/ | 当前权威执行文档 |
-| docs/contracts/ | J00后生成的机器schema与测试向量 |
+| docs/contracts/ | 机器契约：openapi.yaml、HTTP/WS/帧样例、check_contracts.py |
 | docs/archive/ | 历史计划/契约/研究参考，不作为施工指令 |
 
 ## 协作规则

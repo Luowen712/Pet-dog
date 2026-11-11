@@ -7,7 +7,7 @@
 联合任务J00（BA00牵头，BB00、FE00、EA01参与）在此生成，产物已落盘：
 
 - `openapi.yaml` —— 本期核心端点的机器投影，含正常/错误/授权 schema、WS 握手与关闭码登记、`x-impl-status` 实现进度与未决项 `x-open-questions`；
-- `fixtures/http/` —— HTTP 响应样例（21 个，覆盖成功、业务错误、身份/限流/内部失败）；
+- `fixtures/http/` —— HTTP 响应样例（22 个，覆盖成功、业务错误、身份/限流/内部失败、开发期假心跳）；
 - `fixtures/ws/` —— WS 事件样例与关闭码总表（8 个）；
 - `fixtures/frames/` —— 串口帧向量与边界用例（12 个，SUM 可独立重算）；
 - 校验脚本是 `backend/tools/check_contracts.py`（归属见 plan/01 的角色权责表；路径以本行为准，不写 `tools/check_contracts.py`）。

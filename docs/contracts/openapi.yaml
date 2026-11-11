@@ -41,7 +41,7 @@ paths:
       operationId: registerUser
       security: []
       x-impl-status: partial
-      x-impl-gap: backend/app/routers/auth.py 的 user_out 不返回 id，name 用 username 冒充；密码哈希与强度未按 02:218 收敛
+      x-impl-gap: backend/app/routers/auth.py 的 user_out 不返回 id，name 用 username 冒充；密码哈希与强度未按 02:227 收敛
       x-business-errors: [40002, 40900]
       requestBody:
         required: true
@@ -117,7 +117,7 @@ paths:
       tags: [认证]
       summary: 修改密码
       description: |
-        成功后 tv+1，要求重新登录（06:69）。新密码规则见 02:218（Argon2id，10～128 字符）。
+        成功后 tv+1，要求重新登录（06:69）。新密码规则见 02:227（Argon2id，10～128 字符）。
       operationId: changePassword
       x-impl-status: not-implemented
       x-business-errors: [40002, 40101]
@@ -165,7 +165,7 @@ paths:
       summary: 初始化提示（匿名）
       description: |
         仅提示、不锁普通登录（06:71）。无 admin 时也允许合法普通用户登录。
-        前端不得用它的失败结果禁用登录按钮（03:72、05 的 N39）。
+        前端不得用它的失败结果禁用登录按钮（03:73、05 的 N39）。
       operationId: getSetupStatus
       security: []
       x-impl-status: not-implemented
@@ -183,12 +183,42 @@ paths:
         只含本人设备，允许空数组（06:72）。
       operationId: listDevices
       x-impl-status: partial
-      x-impl-gap: backend/app/routers/devices.py 返回全部设备，未按 owner 过滤；battery 缺失时回填 0 而不是 null
+      x-impl-gap: battery 缺失时回填 0 而不是 null；Device 缺 binding_state/control_state/supported_actions
       responses:
         '200':
           $ref: '#/components/responses/DeviceListResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/devices/heartbeat:
+    post:
+      tags: [设备]
+      summary: 开发期假心跳
+      description: |
+        开发期临时接口：没有开发板时刷新 last_seen，让前端显示在线（06 第11节）。
+        真实心跳来自串口 0x03 帧，接入后本接口连同 backend/tools/sim_heartbeat.py 一并删除。
+        环境变量 DEV_HEARTBEAT=false 时整条路由不注册：路径先被 /api/devices/{id} 匹配，
+        再因方法不符返回 405；其它情况（如 /api/devices/heartbeat/ 带尾斜杠）为 404。
+      operationId: devHeartbeat
+      x-impl-status: implemented
+      x-dev-only: true
+      x-business-errors: [40400]
+      security: []  # 开发期路由不校验登录；靠 DEV_HEARTBEAT 默认关闭兜底
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [device_id]
+              properties:
+                device_id:
+                  type: string
+      responses:
+        '200':
+          $ref: '#/components/responses/HeartbeatResponse'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -243,7 +273,8 @@ paths:
       tags: [设备]
       summary: 单台设备
       operationId: getDevice
-      x-impl-status: not-implemented
+      x-impl-status: partial
+      x-impl-gap: Device 缺 binding_state/control_state/supported_actions；battery 缺失时回填 0 而不是 null
       x-business-errors: [40400]
       responses:
         '200':
@@ -258,7 +289,8 @@ paths:
       description: |
         name 为 1～64 字符；保留已有 renameDevice 调用（06:74）。
       operationId: renameDevice
-      x-impl-status: not-implemented
+      x-impl-status: partial
+      x-impl-gap: name 上限 20 字符，契约要求 1～64（backend/app/routers/devices.py 与 frontend/src/views/DeviceList.vue 都还卡 20）
       x-business-errors: [40002, 40400]
       requestBody:
         required: true
@@ -283,7 +315,8 @@ paths:
       description: |
         未知业务字段返回 null，不回填 0（06:40、06:44）。
       operationId: getDeviceStatus
-      x-impl-status: not-implemented
+      x-impl-status: partial
+      x-impl-gap: 缺 online/control_state/session_id/state_revision；battery/action 等未知业务字段回填 0 而不是 null
       x-business-errors: [40400]
       responses:
         '200':
@@ -452,7 +485,7 @@ paths:
       tags: [运维]
       summary: 健康检查
       description: |
-        mode 来自配置而不是写死（02:279）；不含 COM 口与秘密（06:85）。
+        mode 来自配置而不是写死（02:290）；不含 COM 口与秘密（06:85）。
       operationId: getHealth
       security: []
       x-impl-status: partial
@@ -499,7 +532,7 @@ x-open-questions:
   - id: Q3
     question: 注册密码规则
     detail: |
-      02:218 对新密码要求 Argon2id、10～128 字符；现实现为 6 位以上。
+      02:227 对新密码要求 Argon2id、10～128 字符；现实现为 6 位以上。
       本文件不给 RegisterRequest.password 写长度上限，等 06 明确后再定。
 
 components:
@@ -640,6 +673,30 @@ components:
                     enum: [0]
                   data:
                     $ref: '#/components/schemas/ClaimableList'
+    HeartbeatResponse:
+      description: 假心跳回执
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                required: [data]
+                properties:
+                  code:
+                    type: integer
+                    enum: [0]
+                  data:
+                    type: object
+                    required: [device_id, online, last_heartbeat]
+                    properties:
+                      device_id:
+                        type: integer
+                      online:
+                        type: boolean
+                      last_heartbeat:
+                        type: string
+                        format: date-time
     DeviceResponse:
       description: 单台设备
       content:

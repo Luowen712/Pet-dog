@@ -16,5 +16,5 @@
 
 plan仅保留这七份执行文件，不再混放历史Word和旧版本计划。
 历史文件完整移到[archive](archive/2026-11-10_pre-v3.1/)，保留追溯，不作为另一套施工依据。
-[contracts](contracts/README.md)用于J00产出的机器schema/向量，必须和06一致；目前尚未生成，不宣称契约工具已可运行。
+[contracts](contracts/README.md)存放J00产出的机器schema与向量（openapi.yaml、fixtures/），必须和06一致；校验脚本 backend/tools/check_contracts.py 可直接运行，ERROR 即不一致。
 代码实施时脱敏测试证据写docs/evidence/<任务ID>/，正式数据库备份保存在仓库外。
