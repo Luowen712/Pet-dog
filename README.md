@@ -1,73 +1,39 @@
 # Pet-dog · STM32 智能桌面宠物
 
-一个巴掌大的四足桌面机器人：会站、走、转、跳、摇尾巴，屏幕上有表情，下半屏显示时间和天气，身上有喇叭能放音乐，可以对着它说话，也可以从网页上远程操作。
+当前执行版本 **3.1：核心闭环优先，扩展按进度纳入**。计划不等于已实现能力，SIM与HW验收分别记录。
 
-主控是 STM32F103C8T6。在原开源项目的基础上，加了 Python 后端和 Vue3 网页控制台，变成一套完整的三层系统。
+## 组员开工入口
 
-## 仓库里有什么
+直接阅读 [docs/plan/00_执行入口.md](docs/plan/00_执行入口.md)，按角色领取任务：
 
-| 目录 | 放什么 | 谁负责 |
-|---|---|---|
-| `firmware/` | STM32 固件：Keil 工程、PWM 驱动、串口协议、动作表、字库 | 嵌入式 |
-| `hardware/` | 原理图、PCB、BOM、外壳模型、装配说明 | 嵌入式 |
-| `backend/` | Python 后端：FastAPI 服务、串口链路、MySQL、天气与校时 | 后端 |
-| `frontend/` | Vue3 网页控制台：登录、设备、监控台、日志、遥测 | 前端 |
-| `docs/plan/` | 计划文档（分工方案、三条线逐日计划、答辩方案、功能汇总表、市场调研） | 全员 |
-| `docs/contracts/` | **接口契约唯一真源**：`http-api.md`（人读）、`openapi.yaml`（机器可读）、`frame.md`（串口帧）、`events.md`（WS 事件）、`error-codes.md`（错误码）、`action-timing.md`（超时数值） | 全员 |
+- [总计划与交付门禁](docs/plan/01_总计划与交付门禁.md)
+- [后端A/B执行计划](docs/plan/02_后端执行计划.md)
+- [前端执行计划](docs/plan/03_前端执行计划.md)
+- [固件A/硬件B执行计划](docs/plan/04_嵌入式执行计划.md)
+- [需求追踪与验收台账](docs/plan/05_需求追踪与验收台账.md)
+- [跨组接口与状态规则](docs/plan/06_跨组接口与状态规则.md)
 
-空的目录里放了一个 `.gitkeep`，只是为了让目录能进仓库（git 不跟踪空目录）。你往里面放第一个真文件之后，可以把它删掉。
+plan只保留这七份执行文件。原Word、V3和旧契约已移入[历史归档](docs/archive/2026-11-10_pre-v3.1/)，不与当前计划并行执行。
+J00按共享规则生成OpenAPI和固定测试向量到docs/contracts，当前尚未生成；组员无需等待另一轮架构讨论，先按任务00清点并生成样例。
 
-## 怎么开始
+## 仓库结构
 
-```bash
-git clone https://github.com/Luowen712/Pet-dog.git
-cd pet-dog
-```
+| 目录 | 内容 |
+|---|---|
+| backend/ | FastAPI、MySQL、归属权限、设备会话与事件 |
+| frontend/ | 现有Vue页面、组件、API、store和WS客户端 |
+| firmware/ | 固件工程、协议、动作、表情与状态 |
+| hardware/ | 接线、供电、校准、装配和PCB |
+| docs/plan/ | 当前权威执行文档 |
+| docs/contracts/ | J00后生成的机器schema与测试向量 |
+| docs/archive/ | 历史计划/契约/研究参考，不作为施工指令 |
 
-拉下来之后先别急着写代码，按你负责的线读 `docs/plan/` 里对应的那份计划文档：
+## 协作规则
 
-- 做前端：`docs/plan/STM32智能桌面宠物_前端线开发计划_V2.0.docx`
-- 做后端：`docs/plan/STM32智能桌面宠物_后端线开发计划_V2.0.docx`
-- 做嵌入式：`docs/plan/STM32智能桌面宠物_嵌入式线开发计划_V2.0.docx`
-- 谁都该看一遍：`docs/plan/STM32智能桌面宠物_项目分工与实施方案_V2.0.docx`、`docs/plan/项目目标架构与团队分工.md`
-- 前后端联调：`docs/contracts/http-api.md` + `docs/contracts/openapi.yaml`
-
-后端那份文档第 7 章是照着抄就能跑的完整代码，第三章是开工前要装的东西。第一次搭环境按第三章走一遍，遇到问题查第五章。
-
-开工检查：起后端之前先确认 MySQL 服务在跑、库连得上。它没起来，后端只会丢一堆红字：
-
-```sql
--- 在 mysql -uroot -p 里执行一次
-CREATE DATABASE IF NOT EXISTS pet_dog DEFAULT CHARSET utf8mb4 COLLATE utf8mb4_unicode_ci;
-```
-
-建账号、连接串与依赖清单在后端文档 7.4 节。
-
-## 分支约定
-
-- `main`：能跑通的版本，随时可以拿来演示。只有周合并时才往这里推。
-- `dev`：日常开发的主分支，所有人最后都合到这里。
-- `feature/xxx`：自己临时开的分支，做完提 PR 到 `dev`。
-
-一个人在自己的分支上随便改，别直接往 `main` 推。
-
-## 接口先定，再各写各的
-
-三条线能同时开工，靠的是接口先定死：
-
-- 前端和后端之间：HTTP 路径、字段名、返回体 `{code, message, data, timestamp}`——见 `docs/contracts/openapi.yaml` 与 `docs/contracts/http-api.md`
-- 后端和固件之间：串口短帧 `AA 55 LEN CMD DATA SUM`，命令码见 `docs/contracts/frame.md`
-- 实时通道：WebSocket 五种事件，见 `docs/contracts/events.md`
-- 错误码：业务码 / 设备码 / 传输三态分三个域，见 `docs/contracts/error-codes.md`
-
-具体到每个接口长什么样，看这两份（前端已按它写完，后端照着实现即可，共 20 条路径 / 24 个 operation + 1 条 WebSocket）：
-
-- `docs/contracts/http-api.md`：人读版，含字段表、枚举、时序要求、联调自查表，以及「页面已实现、后端待落地」清单
-- `docs/contracts/openapi.yaml`：机器可读，导入 Apifox / Swagger Editor 后能直接发请求、生成 Mock
-
-字段名或命令码要改，先在群里说一声，改完文档再改代码。这一条比什么都重要——联调时九成的扯皮都出在这里。
-
-**契约只有一套**：`docs/contracts/`。任何其它地方的接口描述（包括各线计划文档里的示例）与它冲突时，以它为准，并顺手把那份文档改掉。
+保留现有页面、组件、票据和对账骨架，增量修复状态与权限问题；不重新建前端工程，不无故搬目录或升级依赖。
+main保持可演示版本，dev用于集成，个人功能分支合入前由接收人review和运行测试。
+跨端字段只在06修改，再同步schema和三端实现。不要让旧Word的示例口令、动作索引和ACK成功语义重新进入代码。
+实际部署命令由实现后的新环境验证决定；任务计划中待新增的CLI和测试不得宣传成当前已能运行。
 
 ## 许可证
 
