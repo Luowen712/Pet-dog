@@ -1,9 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import ActionButton from '@/components/ActionButton.vue'
-import ClockCard from '@/components/ClockCard.vue'
 import FaceTile from '@/components/FaceTile.vue'
-import MusicPanel from '@/components/MusicPanel.vue'
 import StateBar from '@/components/StateBar.vue'
 import { ACTION_GROUPS, actionsOf } from '@/constants/actions'
 import { FACES } from '@/constants/faces'
@@ -15,9 +13,16 @@ import type { ButtonState } from '@/stores/pet'
 const deviceStore = useDeviceStore()
 const pet = usePetStore()
 
+/** 本期只启用七个动作 0x30～0x36，其余按钮保留但禁用 */
+const ENABLED_ACTIONS = new Set([0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36])
+
 const heartbeat = computed(() =>
-  deviceStore.current ? formatRelative(deviceStore.current.last_heartbeat) : '--',
+  deviceStore.current ? formatRelative(deviceStore.current.last_heartbeat ?? undefined) : '--',
 )
+
+function isEnabled(code: number): boolean {
+  return ENABLED_ACTIONS.has(code)
+}
 
 function stateOf(code: number): ButtonState {
   return pet.status[code] ?? 'idle'
@@ -35,18 +40,32 @@ function stateOf(code: number): ButtonState {
         </p>
       </div>
       <div class="legend">
-        <span class="lg"><i class="sw pending" />已发</span>
-        <span class="lg"><i class="sw ok" />成功</span>
-        <span class="lg"><i class="sw fail" />无回执 / 失败</span>
+        <span class="lg"><i class="sw pending" />已提交</span>
+        <span class="lg"><i class="sw accepted" />已受理</span>
+        <span class="lg"><i class="sw ok" />完成</span>
+        <span class="lg"><i class="sw fail" />拒绝</span>
+        <span class="lg"><i class="sw unknown" />结果不明</span>
       </div>
     </div>
 
+    <section v-if="!deviceStore.current" class="card no-device">
+      <div class="no-device-body">
+        <span class="mono kicker">NO DEVICE</span>
+        <h3>还没有绑定设备</h3>
+        <p>先到设备页输入 6 位配对码认领一台桌宠，控制台才会连上实时通道。</p>
+        <router-link to="/devices">
+          <el-button type="primary">去认领设备</el-button>
+        </router-link>
+      </div>
+    </section>
+
+    <template v-else>
     <div class="cols">
       <div class="col">
         <section class="card">
           <div class="card-head">
             <span class="card-title">动作指令</span>
-            <span class="card-meta">19 codes · click to send</span>
+            <span class="card-meta">7 enabled · 其余本期禁用</span>
           </div>
           <div class="actions">
             <div v-for="(group, index) in ACTION_GROUPS" :key="group" class="group">
@@ -61,6 +80,7 @@ function stateOf(code: number): ButtonState {
                   :key="action.code"
                   :action="action"
                   :state="stateOf(action.code)"
+                  :disabled="!isEnabled(action.code)"
                   @click="pet.sendAction(action.code)"
                 />
               </div>
@@ -93,9 +113,6 @@ function stateOf(code: number): ButtonState {
       </div>
 
       <div class="col right">
-        <ClockCard />
-        <MusicPanel />
-
         <section class="card meta-card">
           <div class="card-head">
             <span class="card-title">设备信息</span>
@@ -107,8 +124,8 @@ function stateOf(code: number): ButtonState {
               <span class="mono">{{ deviceStore.current?.firmware ?? '--' }}</span>
             </div>
             <div class="meta-row">
-              <span class="mono">Location</span>
-              <span>{{ deviceStore.current?.location ?? '—' }}</span>
+              <span class="mono">Control</span>
+              <span class="mono">{{ deviceStore.current?.control_state ?? '--' }}</span>
             </div>
             <div class="meta-row">
               <span class="mono">Heartbeat</span>
@@ -124,6 +141,7 @@ function stateOf(code: number): ButtonState {
     </div>
 
     <StateBar />
+    </template>
   </div>
 </template>
 
@@ -156,12 +174,49 @@ function stateOf(code: number): ButtonState {
   background: var(--warn);
 }
 
+.sw.accepted {
+  background: var(--warn);
+  opacity: 0.6;
+}
+
 .sw.ok {
   background: var(--ok);
 }
 
 .sw.fail {
   background: var(--danger);
+}
+
+.sw.unknown {
+  background: rgba(20, 20, 20, 0.42);
+}
+
+.no-device-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 34px 28px;
+}
+
+.no-device-body .kicker {
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  color: var(--faint);
+}
+
+.no-device-body h3 {
+  margin: 2px 0 0;
+  font-size: 20px;
+  font-weight: 500;
+}
+
+.no-device-body p {
+  max-width: 520px;
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--dim);
 }
 
 .cols {

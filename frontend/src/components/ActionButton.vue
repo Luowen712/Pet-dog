@@ -4,25 +4,38 @@ import type { ActionDef } from '@/constants/actions'
 import { actionHex } from '@/constants/actions'
 import type { ButtonState } from '@/stores/pet'
 
-const props = defineProps<{ action: ActionDef; state: ButtonState }>()
+const props = defineProps<{ action: ActionDef; state: ButtonState; disabled?: boolean }>()
 defineEmits<{ (event: 'click'): void }>()
 
-const title = computed(() => `${props.action.name} · 动作码 ${actionHex(props.action.code)} · ${props.action.hint}`)
+const title = computed(() => {
+  if (props.disabled) return `${props.action.name} · 本期未启用`
+  const stateText: Record<ButtonState, string> = {
+    idle: '点击下发',
+    pending: '已提交，等待设备受理',
+    accepted: '设备已受理，等待执行完成',
+    ok: '设备已完成',
+    fail: '设备拒绝或提交失败',
+    unknown: '结果不明，需向后端核对',
+  }
+  return `${props.action.name} · 动作码 ${actionHex(props.action.code)} · ${stateText[props.state]}`
+})
 </script>
 
 <template>
   <button
     type="button"
     class="action-btn"
-    :class="state"
+    :class="[state, { disabled }]"
     :title="title"
-    @click="$emit('click')"
+    :disabled="disabled"
+    @click="!disabled && $emit('click')"
   >
     <span class="row">
       <span class="code mono">{{ actionHex(action.code) }}</span>
       <span class="state-dot" />
     </span>
     <span class="label">{{ action.name }}</span>
+    <span v-if="disabled" class="off mono">未启用</span>
   </button>
 </template>
 
@@ -64,6 +77,25 @@ const title = computed(() => `${props.action.name} · 动作码 ${actionHex(prop
   opacity: 1;
 }
 
+.action-btn.disabled {
+  cursor: not-allowed;
+  background: rgba(247, 244, 238, 0.55);
+  border-color: var(--hair-soft);
+}
+
+.action-btn.disabled .label,
+.action-btn.disabled .code {
+  color: var(--faint);
+}
+
+.action-btn.disabled:hover {
+  border-color: var(--hair-soft);
+}
+
+.action-btn.disabled:hover::after {
+  opacity: 0;
+}
+
 .row {
   display: flex;
   align-items: center;
@@ -83,6 +115,15 @@ const title = computed(() => `${props.action.name} · 动作码 ${actionHex(prop
   color: var(--ink);
 }
 
+.off {
+  position: absolute;
+  right: 9px;
+  bottom: 8px;
+  font-size: 7.5px;
+  letter-spacing: 0.1em;
+  color: var(--faint);
+}
+
 .state-dot {
   width: 5px;
   height: 5px;
@@ -95,9 +136,15 @@ const title = computed(() => `${props.action.name} · 动作码 ${actionHex(prop
   border-color: rgba(154, 106, 28, 0.42);
 }
 
-.action-btn.pending .state-dot {
+.action-btn.pending .state-dot,
+.action-btn.accepted .state-dot {
   background: var(--warn);
   animation: pulse 1s ease-in-out infinite;
+}
+
+.action-btn.accepted {
+  background: #fbf2e3;
+  border-color: rgba(154, 106, 28, 0.58);
 }
 
 .action-btn.ok {
@@ -116,6 +163,15 @@ const title = computed(() => `${props.action.name} · 动作码 ${actionHex(prop
 
 .action-btn.fail .state-dot {
   background: var(--danger);
+}
+
+.action-btn.unknown {
+  background: #f1efe9;
+  border-color: rgba(20, 20, 20, 0.24);
+}
+
+.action-btn.unknown .state-dot {
+  background: rgba(20, 20, 20, 0.45);
 }
 
 @keyframes pulse {

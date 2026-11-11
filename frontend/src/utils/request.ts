@@ -4,9 +4,13 @@ import { ElMessage } from 'element-plus'
 import type { ApiResponse } from '@/types'
 import { matchMock } from '@/mock'
 import { ApiError } from './errors'
+import { currentEpoch } from './epoch'
 import { clearSession, getToken } from './session'
 
 const USE_MOCK = import.meta.env.VITE_USE_MOCK === 'true'
+
+/** 会话已切换：调用方应静默丢弃，不要提示、不要改页面 */
+export const STALE_SESSION_CODE = -2
 
 export const http = axios.create({
   baseURL: import.meta.env.VITE_API_BASE ?? '/api',
@@ -55,18 +59,26 @@ export interface RequestOptions {
  * 1. Mock 开启时先走内置假后端（后端未启动也能把页面跑起来）
  * 2. 拆掉 { code, message, data } 外壳，页面直接拿 data
  * 3. 401 清登录态跳登录页，其余错误统一 toast
+ * 4. 发请求时记下会话代次，回来时代次变了就丢弃（A 的旧请求不能改 B 的页面）
  */
 export async function request<T>(
   config: AxiosRequestConfig,
   options: RequestOptions = {},
 ): Promise<T> {
+  const epoch = currentEpoch()
+
   try {
     if (USE_MOCK) {
       const mocked = await matchMock(config)
-      if (mocked.matched) return mocked.data as T
+      if (mocked.matched) {
+        if (epoch !== currentEpoch()) throw new ApiError(STALE_SESSION_CODE, '会话已切换')
+        return mocked.data as T
+      }
     }
 
     const response = await http.request<ApiResponse<T>>(config)
+    if (epoch !== currentEpoch()) throw new ApiError(STALE_SESSION_CODE, '会话已切换')
+
     const body = response.data
     if (body && typeof body === 'object' && typeof body.code === 'number') {
       if (body.code !== 0) throw new ApiError(body.code, body.message || '请求失败')
@@ -74,6 +86,10 @@ export async function request<T>(
     }
     return body as unknown as T
   } catch (error) {
+    // 账号已经切换：旧请求的结果一律丢弃，不提示、不跳登录
+    if (error instanceof ApiError && error.code === STALE_SESSION_CODE) throw error
+    if (epoch !== currentEpoch()) throw new ApiError(STALE_SESSION_CODE, '会话已切换')
+
     if (error instanceof ApiError) {
       if (!options.silent) ElMessage.error(error.message)
       throw error

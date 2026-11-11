@@ -24,7 +24,7 @@ vi.mock('echarts', () => {
 
 const SESSION = {
   token: 'mock-token',
-  user: { username: 'admin', name: '管理员', role: 'admin' },
+  user: { id: 1, username: 'admin', name: '管理员', role: 'admin' },
 }
 
 let wrapper: VueWrapper | null = null
@@ -97,52 +97,50 @@ describe('页面冒烟', () => {
     expect(view.text()).toContain('进入控制台')
   })
 
-  it('控制台铺出 19 个动作按钮和 7 张表情', async () => {
+  it('控制台铺出 19 个动作按钮，其中只有 7 个启用，7 张表情', async () => {
     const view = await mountAt('/console')
     expect(view.text()).toContain('动作指令')
-    expect(view.text()).toContain('音乐播放器')
     expect(view.findAll('.action-btn')).toHaveLength(19)
+    expect(view.findAll('.action-btn.disabled')).toHaveLength(12)
+    expect(view.findAll('.action-btn:not(.disabled)')).toHaveLength(7)
     expect(view.findAll('.face-btn')).toHaveLength(7)
   })
 
-  it('点动作按钮先变黄、收到 ack 后变绿', async () => {
+  it('点动作按钮先变黄；没有 done 回执前不会变绿', async () => {
     const view = await mountAt('/console')
-    const button = view.findAll('.action-btn')[0]
+    const button = view.findAll('.action-btn:not(.disabled)')[0]
     await button.trigger('click')
     await flushPromises()
-    expect(button.classes()).toContain('pending')
+    expect(['pending', 'accepted']).toContain(
+      button.classes().find((name) => ['pending', 'accepted', 'ok'].includes(name)),
+    )
 
     await new Promise((resolve) => setTimeout(resolve, 1500))
     await flushPromises()
-    expect(button.classes()).toContain('ok')
+    expect(button.classes()).not.toContain('ok')
   })
 
-  it('日志页显示表格与分页', async () => {
+  it('日志、看板、场景的路由已隐藏，深链回到设备页', async () => {
+    expect(router.hasRoute('logs')).toBe(false)
+    expect(router.hasRoute('dashboard')).toBe(false)
+    expect(router.hasRoute('scenes')).toBe(false)
+
     const view = await mountAt('/logs')
-    expect(view.text()).toContain('指令日志')
-    expect(view.text()).toContain('应答结果')
-    expect(view.findAll('.el-table__row').length).toBeGreaterThan(0)
+    expect(view.text()).toContain('我的设备')
+    expect(view.text()).not.toContain('指令日志')
   })
 
-  it('看板渲染三张图与统计卡', async () => {
-    const view = await mountAt('/dashboard')
-    expect(view.text()).toContain('数据看板')
-    expect(view.text()).toContain('电量曲线')
-    expect(view.text()).toContain('指令成功率')
-    expect(view.text()).toContain('动作分布')
-    expect(view.findAll('.chart')).toHaveLength(3)
-  })
-
-  it('表情库有 7 张内置表情', async () => {
+  it('表情库有 7 张内置表情，没有上传入口', async () => {
     const view = await mountAt('/faces')
     expect(view.text()).toContain('内置表情')
     expect(view.findAll('.face-card').length).toBeGreaterThanOrEqual(7)
+    expect(view.text()).not.toContain('上传表情')
   })
 
-  it('场景页能加载列表和编辑器', async () => {
-    const view = await mountAt('/scenes')
-    expect(view.text()).toContain('场景编排')
-    expect(view.text()).toContain('早上好')
-    expect(view.text()).toContain('步骤编辑器')
+  it('账号页提供改密、全部退出和注销', async () => {
+    const view = await mountAt('/account')
+    expect(view.text()).toContain('修改密码')
+    expect(view.text()).toContain('退出所有设备上的登录')
+    expect(view.text()).toContain('注销账号')
   })
 })

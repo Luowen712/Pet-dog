@@ -1,6 +1,7 @@
 import type { WsEvent } from '@/types'
 import { runtime } from '@/mock/runtime'
 import { fetchWsTicket } from '@/api/event'
+import { ApiError } from '@/utils/errors'
 
 export type SocketStatus = 'connecting' | 'open' | 'closed'
 
@@ -8,13 +9,13 @@ export interface SocketOptions {
   deviceId: number
   onEvent: (event: WsEvent) => void
   onStatus: (status: SocketStatus) => void
-  /** 不可恢复的关闭（票据/鉴权失败），调用方负责提示用户 */
-  onFatal?: (message: string) => void
+  /** 服务端关闭码：1004 身份失效，1008 设备归属丢失，4009 连接数超限 */
+  onClose: (code: number, message?: string) => void
 }
 
 const USE_MOCK = import.meta.env.VITE_USE_MOCK === 'true'
 
-/** 75 秒一个事件都没有，只可能是死连接（服务端每 30 秒至少会有一次活动） */
+/** 75 秒一个事件都没有，只可能是死连接（服务端每 30 秒至少会有一次 ping） */
 const SILENCE_MS = 75000
 
 /**
@@ -23,15 +24,14 @@ const SILENCE_MS = 75000
  * 三件事和契约绑定：
  * 1. JWT 不进 URL —— 先 POST /api/events/ticket 换一张 30 秒、一次性的票据，票据随 URL 走；
  * 2. 每次建连（含重连）都要重新取票，旧票用过即废；
- * 3. 关闭码决定下一步：1000/4001 不重连，4003 重新取票，4009 退避 5 秒，
- *    1011 或异常断开按 1 → 2 → 4 → 8 → 10 秒退避。
+ * 3. 关闭码决定下一步：1000 不重连；1004 回登录；1008 清设备；4003 重新取票；
+ *    4009 停止自动重试；1001/1011 按 1→2→4→8→10 秒退避。
  */
 export class DeviceSocket {
   private options: SocketOptions
   private ws: WebSocket | null = null
   private retry = 0
   private timer: number | null = null
-  private heartbeat: number | null = null
   private watchdog: number | null = null
   private closed = false
   /** 自己主动断开（看门狗超时/传输错误），不是服务端正常关闭 */
@@ -44,6 +44,10 @@ export class DeviceSocket {
 
   /** 建连：先换票再开 socket，票据拿不到就按重连流程退避 */
   async connect(): Promise<void> {
+    if (!this.options.deviceId) {
+      this.options.onStatus('closed')
+      return
+    }
     this.closed = false
     this.clearReconnect()
     this.options.onStatus('connecting')
@@ -51,9 +55,15 @@ export class DeviceSocket {
     let ticket = ''
     try {
       ticket = (await fetchWsTicket(this.options.deviceId)).ticket
-    } catch {
+    } catch (error) {
       if (this.closed) return
       this.options.onStatus('closed')
+      if (error instanceof ApiError && error.code === 40400) {
+        // 设备不可见/已解绑：停止重连，交给调用方清设备
+        this.closed = true
+        this.options.onClose(1008)
+        return
+      }
       this.scheduleReconnect()
       return
     }
@@ -70,13 +80,9 @@ export class DeviceSocket {
     this.closed = true
     this.clearReconnect()
     this.stopWatchdog()
-    if (this.heartbeat !== null) {
-      window.clearInterval(this.heartbeat)
-      this.heartbeat = null
-    }
     this.mockOff?.()
     this.mockOff = null
-    this.ws?.close()
+    this.ws?.close(1000)
     this.ws = null
     this.options.onStatus('closed')
   }
@@ -105,14 +111,35 @@ export class DeviceSocket {
       if (this.closed) return
       this.options.onStatus('open')
       this.mockOff = runtime.subscribe((event) => this.options.onEvent(event))
-      this.options.onEvent({ event: 'link', data: { online: true } })
-      this.heartbeat = window.setInterval(() => {
-        if (!this.closed) this.options.onEvent({ event: 'state', data: runtime.snapshot() })
-      }, 8000)
+      this.options.onEvent({
+        event: 'link',
+        data: {
+          device_id: this.options.deviceId,
+          online: true,
+          control_state: 'ready',
+          reason: null,
+          session_id: 'mock',
+          state_revision: 1,
+        },
+      })
+      this.options.onEvent({
+        event: 'state',
+        data: {
+          battery: 88,
+          voltage: 3.9,
+          action: 49,
+          face: 0,
+          music_state: null,
+          track: null,
+          volume: null,
+          weather_code: null,
+          temp: null,
+        },
+      })
     }, 320)
   }
 
-  /** 关闭码语义见 docs/contracts/events.md §1.3 */
+  /** 关闭码语义见 docs/plan/06 §5 */
   private handleClose(code: number): void {
     this.stopWatchdog()
     this.ws = null
@@ -126,19 +153,26 @@ export class DeviceSocket {
     }
     switch (code) {
       case 1000:
-        // 服务端正常收工，不要无限重连
+        // 用户主动关闭/页面卸载，不要重连
         this.closed = true
         return
-      case 4001:
+      case 1004:
+        // 身份失效：换账号、改密、登出全部会话
         this.closed = true
-        this.options.onFatal?.('实时连接鉴权失败，请重新登录')
+        this.options.onClose(1004)
+        return
+      case 1008:
+        // 设备被解绑或归属丢失：只清设备，保留登录
+        this.closed = true
+        this.options.onClose(1008)
         return
       case 4003:
-        // 票据无效/过期/已用：connect() 本来就会重新取票
-        this.scheduleReconnect(1)
+        // 票据无效/过期/已用：重新取票
+        this.scheduleReconnect(0)
         return
       case 4009:
-        this.scheduleReconnect(5)
+        this.closed = true
+        this.options.onClose(4009, '该设备已在其他窗口打开，最多同时 3 个连接')
         return
       default:
         this.scheduleReconnect()
