@@ -8,6 +8,7 @@ from app.db import get_db  # Session 工厂（依赖）
 from app.deps import current_user  # 登录校验（依赖）
 from app.models import Device, Telemetry  # 两张表的映射类
 from app.resp import fail, ok  # 统一响应外壳
+from app.services import presence
 
 router = APIRouter(prefix="/api/devices", tags=["设备"])
 
@@ -32,16 +33,25 @@ class MusicIn(BaseModel):
     value: int = 0
 
 
-def device_out(d: Device, battery: int) -> dict:
+def device_out(d: Device, battery: int, online: bool | None = None) -> dict:
+    if online is None:
+        online = presence.is_online(d.last_seen)
     return {
         "id": d.id,
         "name": d.name or f"桌宠{d.id}",
-        "online": bool(d.online),
+        "online": online,
         "firmware": d.firmware or "",
-        "last_heartbeat": d.last_seen.isoformat() if d.last_seen else None,
+        "last_heartbeat": to_iso(d.last_seen),
         "battery": battery,
         "location": "",
     }
+
+
+def get_owned_device(db: Session, uid: int, device_pk: int) -> Device | None:
+
+    return (
+        db.query(Device).filter(Device.id == device_pk, Device.owner_id == uid).first()
+    )
 
 
 def latest_telemetry(db: Session, d: Device) -> Telemetry | None:
@@ -64,11 +74,14 @@ def latest_battery(db: Session, d: Device) -> int:
 # 获取设备列表，供页面显示和选择设备
 @router.get("")
 def list_devices(user: dict = Depends(current_user), db: Session = Depends(get_db)):
-    devices = db.query(Device).all()
+    devices = db.query(Device).filter(Device.owner_id == user.get("uid")).all()
 
+    at = datetime.now()
     data = []
     for d in devices:
-        data.append(device_out(d, latest_battery(db, d)))
+        data.append(
+            device_out(d, latest_battery(db, d), presence.is_online(d.last_seen, at))
+        )
     return ok(data)
 
 
@@ -77,7 +90,7 @@ def list_devices(user: dict = Depends(current_user), db: Session = Depends(get_d
 def get_device(
     id: int, user: dict = Depends(current_user), db: Session = Depends(get_db)
 ):
-    d = db.get(Device, id)
+    d = get_owned_device(db, user.get("uid"), id)
     if not d:
         return fail(40400, "设备不存在")
     return ok(device_out(d, latest_battery(db, d)))
@@ -91,7 +104,7 @@ def rename_device(
     user: dict = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    d = db.get(Device, id)
+    d = get_owned_device(db, user.get("uid"), id)
     if not d:
         return fail(40400, "设备不存在")
 
@@ -118,7 +131,7 @@ DEFAULT_VOLUME = 15  # DFPlayer 量程 0-30
 def get_device_status(
     id: int, user: dict = Depends(current_user), db: Session = Depends(get_db)
 ):
-    d = db.get(Device, id)
+    d = get_owned_device(db, user.get("uid"), id)
     if not d:
         return fail(40400, "设备不存在")
 
@@ -153,7 +166,7 @@ def control_music(
     user: dict = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    d = db.get(Device, id)
+    d = get_owned_device(db, user.get("uid"), id)
     if not d:
         return fail(40400, "设备不存在")
     if body.command not in MUSIC_CODES:
@@ -183,4 +196,22 @@ def control_music(
     # TODO 串口起来后在这里发 0x0A 帧（DATA = [command, value]），并推 WS music 事件
     return ok(
         {"ok": True, "state": st["state"], "track": st["track"], "volume": st["volume"]}
+    )
+
+
+class HeartbeatIn(BaseModel):
+    device_id: str
+    battery: int | None = None
+    action: int | None = None
+
+
+@router.post("/heartbeat")
+def heartbeat(body: HeartbeatIn, db: Session = Depends(get_db)):
+    d = db.query(Device).filter(Device.device_id == body.device_id).first()
+    if not d:
+        return fail(40400, "设备不存在")
+    d.last_seen = datetime.now()
+    db.commit()
+    return ok(
+        {"device_id": d.id, "online": True, "last_heartbeat": to_iso(d.last_seen)}
     )
