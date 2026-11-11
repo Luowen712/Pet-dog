@@ -64,7 +64,7 @@ function switchMode(register: boolean): void {
 
 function fillDemo(): void {
   form.username = 'admin'
-  form.password = '123456'
+  form.password = 'admin123'
 }
 
 async function onSubmit(): Promise<void> {
