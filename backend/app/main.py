@@ -9,7 +9,7 @@ from app import models  # noqa: F401  必须留着，否则一张表都不建
 from app.db import Base, engine
 from app.errors import register_handlers
 from app.resp import ok
-from app.routers import auth, devices
+from app.routers import auth, devices, faces, setup
 
 Base.metadata.create_all(bind=engine)
 
@@ -34,6 +34,9 @@ app.include_router(devices.router)
 
 # 把 auth 路由挂到应用上：/api/auth/login、/api/auth/me
 app.include_router(auth.router)
+# 初始化提示（匿名）与七个内置表情（只读）
+app.include_router(setup.router)
+app.include_router(faces.router)
 
 
 @app.get("/docs", include_in_schema=False)
