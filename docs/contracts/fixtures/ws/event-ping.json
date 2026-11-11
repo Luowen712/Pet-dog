@@ -1,0 +1,11 @@
+{
+  "id": "ws.event.ping",
+  "rule": "06:132 ping 30 秒一次，仅刷新前端看门狗",
+  "schema": "WsEvent",
+  "body": {
+    "event": "ping",
+    "data": {
+      "server_time": "2026-11-10T12:00:30Z"
+    }
+  }
+}

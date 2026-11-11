@@ -1,0 +1,17 @@
+{
+  "id": "http.events.ticket.200",
+  "method": "POST",
+  "path": "/api/events/ticket",
+  "http_status": 200,
+  "rule": "06:42/06:144 ticket 30 秒一次性，JWT 不进 URL",
+  "response": "TicketResponse",
+  "body": {
+    "code": 0,
+    "message": "ok",
+    "timestamp": 1731210000000,
+    "data": {
+      "ticket": "tkt_2b7d1e5a8c34",
+      "expires_in_sec": 30
+    }
+  }
+}

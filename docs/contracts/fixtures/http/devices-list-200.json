@@ -1,0 +1,47 @@
+{
+  "id": "http.devices.list.200",
+  "method": "GET",
+  "path": "/api/devices",
+  "http_status": 200,
+  "rule": "06:39/06:48/06:72 battery 与 last_heartbeat 可为 null",
+  "response": "DeviceListResponse",
+  "body": {
+    "code": 0,
+    "message": "ok",
+    "timestamp": 1731210000000,
+    "data": [
+      {
+        "id": 1,
+        "name": "桌宠一号",
+        "online": true,
+        "firmware": "3.1.0",
+        "last_heartbeat": "2026-11-10T12:00:00Z",
+        "battery": 87,
+        "location": "书桌",
+        "binding_state": "bound",
+        "control_state": "ready",
+        "supported_actions": [
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54
+        ]
+      },
+      {
+        "id": 3,
+        "name": "未领取",
+        "online": false,
+        "firmware": "",
+        "last_heartbeat": null,
+        "battery": null,
+        "location": "",
+        "binding_state": "claimable",
+        "control_state": "unconfigured",
+        "supported_actions": []
+      }
+    ]
+  }
+}

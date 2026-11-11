@@ -1,0 +1,15 @@
+{
+  "id": "http.error.40002.value",
+  "method": "POST",
+  "path": "/api/commands/send",
+  "http_status": 200,
+  "rule": "06:18 值非法；动作未启用也走这里（06:13 仅 0x30～0x36）",
+  "response": "BusinessError",
+  "body": {
+    "code": 40002,
+    "message": "动作未启用",
+    "data": null,
+    "timestamp": 1731210000000,
+    "reason": "action_disabled"
+  }
+}

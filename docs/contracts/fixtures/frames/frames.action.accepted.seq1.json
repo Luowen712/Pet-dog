@@ -1,0 +1,18 @@
+{
+  "id": "frames.action.accepted.seq1",
+  "direction": "device->host",
+  "cmd": "0x81",
+  "name": "已接受动作（seq=1）",
+  "rule": "06:215 已接受；06:228 官方向量2",
+  "data": [
+    "0x01",
+    "0x01"
+  ],
+  "data_fields": [
+    "status=0x01",
+    "seq=1"
+  ],
+  "hex": "AA 55 02 81 01 01 7A",
+  "sum": "0x7A",
+  "sum_rule": "SUM = ~(LEN + CMD + ΣDATA) & 0xFF，不是 CRC；LEN = DATA 长度，总长 = LEN + 5"
+}

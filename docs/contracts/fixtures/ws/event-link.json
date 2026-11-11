@@ -1,0 +1,16 @@
+{
+  "id": "ws.event.link",
+  "rule": "06:131 link 带 control_state 与 reason",
+  "schema": "WsEvent",
+  "body": {
+    "event": "link",
+    "data": {
+      "device_id": 1,
+      "online": false,
+      "control_state": "offline",
+      "reason": "serial_closed",
+      "session_id": null,
+      "state_revision": 8
+    }
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "id": "http.devices.status.200.null_fields",
+  "method": "GET",
+  "path": "/api/devices/1/status",
+  "http_status": 200,
+  "rule": "06:40/06:44 未知业务字段为 null，不回填 0",
+  "response": "DeviceStatusResponse",
+  "body": {
+    "code": 0,
+    "message": "ok",
+    "timestamp": 1731210000000,
+    "data": {
+      "device_id": 1,
+      "online": true,
+      "control_state": "ready",
+      "session_id": "6f1c9b1e-3d2a-4a71-9f0c-2b7d1e5a8c34",
+      "state_revision": 7,
+      "battery": 87,
+      "voltage": 7.42,
+      "action": null,
+      "face": 2,
+      "music_state": null,
+      "track": null,
+      "volume": null,
+      "weather_code": null,
+      "temp": null,
+      "updated_at": "2026-11-10T12:00:00Z"
+    }
+  }
+}

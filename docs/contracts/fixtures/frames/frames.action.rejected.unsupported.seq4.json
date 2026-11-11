@@ -1,0 +1,18 @@
+{
+  "id": "frames.action.rejected.unsupported.seq4",
+  "direction": "device->host",
+  "cmd": "0x05",
+  "name": "关联拒绝（不支持动作，seq=4）",
+  "rule": "06:227 错误码 01=不支持动作；发送 0x37 等未启用码时用此向量",
+  "data": [
+    "0x01",
+    "0x04"
+  ],
+  "data_fields": [
+    "error_code=0x01（不支持动作）",
+    "seq=4"
+  ],
+  "hex": "AA 55 02 05 01 04 F3",
+  "sum": "0xF3",
+  "sum_rule": "SUM = ~(LEN + CMD + ΣDATA) & 0xFF，不是 CRC；LEN = DATA 长度，总长 = LEN + 5"
+}

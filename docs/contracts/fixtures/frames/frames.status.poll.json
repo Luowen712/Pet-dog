@@ -1,0 +1,12 @@
+{
+  "id": "frames.status.poll",
+  "direction": "host->device",
+  "cmd": "0x06",
+  "name": "催状态上报（无 seq，不配对）",
+  "rule": "06:221",
+  "data": [],
+  "data_fields": [],
+  "hex": "AA 55 00 06 F9",
+  "sum": "0xF9",
+  "sum_rule": "SUM = ~(LEN + CMD + ΣDATA) & 0xFF，不是 CRC；LEN = DATA 长度，总长 = LEN + 5"
+}

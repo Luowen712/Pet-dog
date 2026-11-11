@@ -1,0 +1,22 @@
+{
+  "id": "frames.action.request.stand.seq1",
+  "direction": "host->device",
+  "cmd": "0x01",
+  "name": "动作请求（站立，seq=1）",
+  "rule": "06:210 帧格式；06:214 动作请求；06:228 官方向量1",
+  "data": [
+    "0x31",
+    "0x00",
+    "0x01",
+    "0x01"
+  ],
+  "data_fields": [
+    "action=0x31",
+    "speed=0",
+    "repeat=1",
+    "seq=1"
+  ],
+  "hex": "AA 55 04 01 31 00 01 01 C7",
+  "sum": "0xC7",
+  "sum_rule": "SUM = ~(LEN + CMD + ΣDATA) & 0xFF，不是 CRC；LEN = DATA 长度，总长 = LEN + 5"
+}

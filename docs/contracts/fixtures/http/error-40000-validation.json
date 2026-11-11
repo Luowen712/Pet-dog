@@ -1,0 +1,14 @@
+{
+  "id": "http.error.40000.validation",
+  "method": "POST",
+  "path": "/api/commands/send",
+  "http_status": 200,
+  "rule": "06:18 参数缺失或结构错误仍走 HTTP200+40000",
+  "response": "BusinessError",
+  "body": {
+    "code": 40000,
+    "message": "参数缺失或类型不对",
+    "data": null,
+    "timestamp": 1731210000000
+  }
+}

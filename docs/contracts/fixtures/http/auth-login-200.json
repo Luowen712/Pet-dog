@@ -1,0 +1,22 @@
+{
+  "id": "http.auth.login.200",
+  "method": "POST",
+  "path": "/api/auth/login",
+  "http_status": 200,
+  "rule": "06:66；User 必含 id（06:38）",
+  "response": "LoginResponse",
+  "body": {
+    "code": 0,
+    "message": "ok",
+    "timestamp": 1731210000000,
+    "data": {
+      "token": "<jwt>",
+      "user": {
+        "id": 2,
+        "username": "lisi",
+        "name": "李四",
+        "role": "user"
+      }
+    }
+  }
+}

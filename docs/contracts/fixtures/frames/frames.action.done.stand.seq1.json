@@ -1,0 +1,18 @@
+{
+  "id": "frames.action.done.stand.seq1",
+  "direction": "device->host",
+  "cmd": "0x02",
+  "name": "动作完成（站立，seq=1）",
+  "rule": "06:216 动作完成；06:228 官方向量3",
+  "data": [
+    "0x31",
+    "0x01"
+  ],
+  "data_fields": [
+    "action=0x31",
+    "seq=1"
+  ],
+  "hex": "AA 55 02 02 31 01 C9",
+  "sum": "0xC9",
+  "sum_rule": "SUM = ~(LEN + CMD + ΣDATA) & 0xFF，不是 CRC；LEN = DATA 长度，总长 = LEN + 5"
+}

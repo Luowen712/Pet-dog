@@ -1,0 +1,15 @@
+{
+  "id": "http.auth.me.401",
+  "method": "GET",
+  "path": "/api/auth/me",
+  "http_status": 401,
+  "rule": "06:19 身份无效 HTTP401+40101；登录失败的语义仍未决，见 openapi.yaml 的 x-open-questions Q1",
+  "response": "Unauthorized",
+  "body": {
+    "code": 40101,
+    "message": "登录已过期",
+    "data": null,
+    "timestamp": 1731210000000,
+    "reason": "token_invalid"
+  }
+}

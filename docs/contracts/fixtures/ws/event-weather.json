@@ -1,0 +1,13 @@
+{
+  "id": "ws.event.weather",
+  "rule": "06:134 weather 属扩展开启事件，不代表具体命令执行成功",
+  "schema": "WsEvent",
+  "body": {
+    "event": "weather",
+    "data": {
+      "code": 1,
+      "text": "多云",
+      "temp": 18
+    }
+  }
+}

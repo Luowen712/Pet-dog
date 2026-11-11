@@ -1,0 +1,18 @@
+{
+  "id": "frames.action.done.walk.seq2",
+  "direction": "device->host",
+  "cmd": "0x02",
+  "name": "动作完成（前进，seq=2）",
+  "rule": "06:216；06:214 前进=0x33（仅 0x30～0x36 开放）",
+  "data": [
+    "0x33",
+    "0x02"
+  ],
+  "data_fields": [
+    "action=0x33",
+    "seq=2"
+  ],
+  "hex": "AA 55 02 02 33 02 C6",
+  "sum": "0xC6",
+  "sum_rule": "SUM = ~(LEN + CMD + ΣDATA) & 0xFF，不是 CRC；LEN = DATA 长度，总长 = LEN + 5"
+}

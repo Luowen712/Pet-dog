@@ -1,0 +1,14 @@
+{
+  "id": "http.error.40400.not_visible",
+  "method": "GET",
+  "path": "/api/devices/7",
+  "http_status": 200,
+  "rule": "06:18/06:80 不存在或不属于我；HTTP 40400 不等于 done",
+  "response": "BusinessError",
+  "body": {
+    "code": 40400,
+    "message": "设备不存在",
+    "data": null,
+    "timestamp": 1731210000000
+  }
+}

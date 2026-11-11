@@ -1,0 +1,12 @@
+{
+  "id": "frames.heartbeat.request",
+  "direction": "host->device",
+  "cmd": "0x04",
+  "name": "心跳请求（每 3 秒）",
+  "rule": "06:219；06:228 官方向量4",
+  "data": [],
+  "data_fields": [],
+  "hex": "AA 55 00 04 FB",
+  "sum": "0xFB",
+  "sum_rule": "SUM = ~(LEN + CMD + ΣDATA) & 0xFF，不是 CRC；LEN = DATA 长度，总长 = LEN + 5"
+}

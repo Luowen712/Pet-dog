@@ -1,0 +1,15 @@
+{
+  "id": "http.error.40300.forbidden",
+  "method": "GET",
+  "path": "/api/devices/1/status",
+  "http_status": 403,
+  "rule": "06:19 无管理员能力 HTTP403+40300；V3.1 没有 admin-only 端点，本样例描述横切层，不绑定单一 operation",
+  "response": "Forbidden",
+  "body": {
+    "code": 40300,
+    "message": "无权限",
+    "data": null,
+    "timestamp": 1731210000000
+  },
+  "scope": "shared"
+}

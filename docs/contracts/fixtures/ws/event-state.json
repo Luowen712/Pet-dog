@@ -1,0 +1,25 @@
+{
+  "id": "ws.event.state",
+  "rule": "06:130 state 为完整 DeviceStatus，未知字段明确 null",
+  "schema": "WsEvent",
+  "body": {
+    "event": "state",
+    "data": {
+      "device_id": 1,
+      "online": true,
+      "control_state": "ready",
+      "session_id": "6f1c9b1e-3d2a-4a71-9f0c-2b7d1e5a8c34",
+      "state_revision": 8,
+      "battery": 87,
+      "voltage": 7.42,
+      "action": 0,
+      "face": 2,
+      "music_state": null,
+      "track": null,
+      "volume": null,
+      "weather_code": null,
+      "temp": null,
+      "updated_at": "2026-11-10T12:00:05Z"
+    }
+  }
+}

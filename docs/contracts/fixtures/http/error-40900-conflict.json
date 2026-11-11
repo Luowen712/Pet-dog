@@ -1,0 +1,15 @@
+{
+  "id": "http.error.40900.conflict",
+  "method": "POST",
+  "path": "/api/devices/claim",
+  "http_status": 200,
+  "rule": "06:18 冲突；同键异体为 idempotency_conflict，忙为 busy",
+  "response": "BusinessError",
+  "body": {
+    "code": 40900,
+    "message": "该设备已被占用",
+    "data": null,
+    "timestamp": 1731210000000,
+    "reason": "device_already_bound"
+  }
+}

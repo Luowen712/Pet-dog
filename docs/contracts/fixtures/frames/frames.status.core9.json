@@ -1,0 +1,31 @@
+{
+  "id": "frames.status.core9",
+  "direction": "device->host",
+  "cmd": "0x03",
+  "name": "状态上报（核心 9 字节）",
+  "rule": "06:218 03 为下表 9 字节；06:225 偏移与未知值定义",
+  "data": [
+    "0x57",
+    "0x00",
+    "0x02",
+    "0xFF",
+    "0xFF",
+    "0x1C",
+    "0xFE",
+    "0xFF",
+    "0x14"
+  ],
+  "data_fields": [
+    "offset0 电量=0x57=87%",
+    "offset1 动作=0x00 空闲",
+    "offset2 表情=0x02",
+    "offset3 音乐状态=0xFF 未知",
+    "offset4 曲目=0xFF 未知",
+    "offset5-6 电压=0x1CFE=7422mV",
+    "offset7 天气=0xFF 未知",
+    "offset8 温度=0x14=+20°C"
+  ],
+  "hex": "AA 55 09 03 57 00 02 FF FF 1C FE FF 14 6F",
+  "sum": "0x6F",
+  "sum_rule": "SUM = ~(LEN + CMD + ΣDATA) & 0xFF，不是 CRC；LEN = DATA 长度，总长 = LEN + 5"
+}

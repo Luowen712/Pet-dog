@@ -1,0 +1,14 @@
+{
+  "id": "http.error.50000.internal",
+  "method": "GET",
+  "path": "/api/devices",
+  "http_status": 500,
+  "rule": "06:19 内部失败；不得含堆栈、SQL、内部路径",
+  "response": "InternalError",
+  "body": {
+    "code": 50000,
+    "message": "服务器内部错误",
+    "data": null,
+    "timestamp": 1731210000000
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "id": "ws.event.ack.legacy",
+  "rule": "06:133 ack 仅兼容受理通知；新版 store 不据此转 done、不清 pending",
+  "schema": "WsEvent",
+  "body": {
+    "event": "ack",
+    "data": {
+      "cmd_id": "9b1f0d2c-7a34-4e58-8b6d-0c2f5e7a1b93",
+      "seq": 1,
+      "status": "OK",
+      "cost_ms": 12
+    }
+  }
+}

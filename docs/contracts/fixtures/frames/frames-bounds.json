@@ -1,0 +1,50 @@
+{
+  "id": "frames.length_and_sum_bounds",
+  "rule": "06:210 LEN=0..31，总长 LEN+5≤36",
+  "cases": [
+    {
+      "name": "LEN=0 空 DATA",
+      "hex": "AA 55 00 04 FB",
+      "valid": true
+    },
+    {
+      "name": "LEN=4 动作请求",
+      "hex": "AA 55 04 01 31 00 01 01 C7",
+      "valid": true
+    },
+    {
+      "name": "LEN=31 最大长度，总长 36",
+      "cmd": "0x03",
+      "len": 31,
+      "valid": true,
+      "note": "仅用于边界编译/解析测试，不表示固件必须实现",
+      "hex": "AA 55 1F 03 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 DD",
+      "total_bytes": 36
+    },
+    {
+      "name": "LEN=32 超长",
+      "cmd": "0x03",
+      "len": 32,
+      "valid": false,
+      "error": "03 完整超长动作帧由固件拒绝，主机侧同样视为非法",
+      "hex": "AA 55 20 03 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 DC",
+      "total_bytes": 37
+    },
+    {
+      "name": "SUM 错一位",
+      "hex": "AA 55 04 01 31 00 01 01 C8",
+      "valid": false,
+      "error": "坏帧只计数，不取垃圾 seq 回包"
+    },
+    {
+      "name": "缺少帧头",
+      "hex": "55 04 01 31 00 01 01 C7",
+      "valid": false
+    },
+    {
+      "name": "仅帧头无 LEN",
+      "hex": "AA 55",
+      "valid": false
+    }
+  ]
+}

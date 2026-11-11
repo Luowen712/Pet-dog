@@ -1,0 +1,16 @@
+{
+  "id": "http.setup.status.200",
+  "method": "GET",
+  "path": "/api/setup/status",
+  "http_status": 200,
+  "rule": "06:71 仅提示、不锁普通登录",
+  "response": "SetupStatusResponse",
+  "body": {
+    "code": 0,
+    "message": "ok",
+    "timestamp": 1731210000000,
+    "data": {
+      "setup_required": true
+    }
+  }
+}

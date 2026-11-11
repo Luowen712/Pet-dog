@@ -1,0 +1,19 @@
+{
+  "id": "http.devices.claimable.200",
+  "method": "GET",
+  "path": "/api/devices/claimable",
+  "http_status": 200,
+  "rule": "06:76 只含 id 与 name，不含 owner",
+  "response": "ClaimableListResponse",
+  "body": {
+    "code": 0,
+    "message": "ok",
+    "timestamp": 1731210000000,
+    "data": [
+      {
+        "id": 3,
+        "name": "未领取"
+      }
+    ]
+  }
+}

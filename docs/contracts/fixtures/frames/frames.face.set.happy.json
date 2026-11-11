@@ -1,0 +1,16 @@
+{
+  "id": "frames.face.set.happy",
+  "direction": "host->device",
+  "cmd": "0x07",
+  "name": "设置预设表情（开心，face=1，无确认码）",
+  "rule": "06:222 表情无确认码；06:226 face 0..6 与前端显示序号 1..7 不同",
+  "data": [
+    "0x01"
+  ],
+  "data_fields": [
+    "face=0x01"
+  ],
+  "hex": "AA 55 01 07 01 F6",
+  "sum": "0xF6",
+  "sum_rule": "SUM = ~(LEN + CMD + ΣDATA) & 0xFF，不是 CRC；LEN = DATA 长度，总长 = LEN + 5"
+}

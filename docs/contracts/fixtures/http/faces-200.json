@@ -1,0 +1,57 @@
+{
+  "id": "http.faces.list.200",
+  "method": "GET",
+  "path": "/api/faces",
+  "http_status": 200,
+  "rule": "06:89 后端是权威来源；id 0..6；preview 可为 null",
+  "response": "FaceListResponse",
+  "body": {
+    "code": 0,
+    "message": "ok",
+    "timestamp": 1731210000000,
+    "data": [
+      {
+        "id": 0,
+        "name": "普通",
+        "builtin": true,
+        "preview": null
+      },
+      {
+        "id": 1,
+        "name": "开心",
+        "builtin": true,
+        "preview": null
+      },
+      {
+        "id": 2,
+        "name": "困倦",
+        "builtin": true,
+        "preview": null
+      },
+      {
+        "id": 3,
+        "name": "生气",
+        "builtin": true,
+        "preview": null
+      },
+      {
+        "id": 4,
+        "name": "惊讶",
+        "builtin": true,
+        "preview": null
+      },
+      {
+        "id": 5,
+        "name": "伤心",
+        "builtin": true,
+        "preview": null
+      },
+      {
+        "id": 6,
+        "name": "卖萌",
+        "builtin": true,
+        "preview": null
+      }
+    ]
+  }
+}

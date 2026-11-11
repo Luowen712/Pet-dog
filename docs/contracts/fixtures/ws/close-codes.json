@@ -1,0 +1,58 @@
+{
+  "id": "ws.close_codes",
+  "rule": "06:147-155 是本表唯一登记处；前端按码分支，不解析原因字符串",
+  "codes": [
+    {
+      "code": 1000,
+      "trigger": "用户主动关闭、页面卸载",
+      "frontend": "不重连",
+      "reconnect": false
+    },
+    {
+      "code": 1001,
+      "trigger": "服务端重启或进程内非预期异常",
+      "frontend": "封顶退避重连并重新取一次性 ticket",
+      "reconnect": true,
+      "backoff_seconds": [
+        1,
+        2,
+        4,
+        8,
+        10
+      ]
+    },
+    {
+      "code": 1004,
+      "trigger": "身份失效（tv 不一致、注销、改密、登出全部会话）",
+      "frontend": "查连接代次后走统一登出，不自动重连",
+      "reconnect": false
+    },
+    {
+      "code": 1008,
+      "trigger": "设备归属丢失（解绑、被他人认领、管理员回收）",
+      "frontend": "只停该设备，刷新列表，保留登录态",
+      "reconnect": false
+    },
+    {
+      "code": 4003,
+      "trigger": "ticket 无效、过期或已使用",
+      "frontend": "重新取票后重连；取票 403/40400 则停",
+      "reconnect": true
+    },
+    {
+      "code": 4009,
+      "trigger": "同一 (uid, device_pk) 连接数已达上限 3",
+      "frontend": "停自动重试，给手动重试入口",
+      "reconnect": false
+    },
+    {
+      "code": 1011,
+      "trigger": "服务端内部错误、队列溢出",
+      "frontend": "与身份失效分离，封顶退避，达阈值给可见提示",
+      "reconnect": true
+    }
+  ],
+  "forbidden": {
+    "4001": "不再表示关闭原因；参数与格式错误由 HTTP 40000/40002 承接（06:157）"
+  }
+}

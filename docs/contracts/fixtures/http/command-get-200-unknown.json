@@ -1,0 +1,27 @@
+{
+  "id": "http.commands.get.200.unknown",
+  "method": "GET",
+  "path": "/api/commands/{id}",
+  "http_status": 200,
+  "rule": "06:106/06:117 超时或写入不确定为 unknown；partial_write 时可能已写，禁止当作 done",
+  "response": "CommandReceiptResponse",
+  "body": {
+    "code": 0,
+    "message": "ok",
+    "timestamp": 1731210000000,
+    "data": {
+      "cmd_id": "9b1f0d2c-7a34-4e58-8b6d-0c2f5e7a1b93",
+      "device_id": 1,
+      "action": 49,
+      "seq": 2,
+      "status": "unknown",
+      "transport": "partial_write",
+      "reason": "write_timeout",
+      "error_code": null,
+      "revision": 2,
+      "created_at": "2026-11-10T12:05:00Z",
+      "updated_at": "2026-11-10T12:05:01Z",
+      "finished_at": null
+    }
+  }
+}

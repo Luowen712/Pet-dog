@@ -1,0 +1,1240 @@
+openapi: 3.0.3
+
+info:
+  title: Pet-Dog 核心接口契约
+  version: 3.1.0
+  description: |
+    本期（V3.1）核心端点合同。
+
+    规则来源是 docs/plan/06_跨组接口与状态规则.md。本文件是 06 的机器投影：
+    不得自行新增状态、字段或时序；发现分歧先改 06，再改本文件与配套 fixtures。
+
+    x-impl-status 只有 implemented / partial / not-implemented 三值：
+    implemented 与 partial 表示 backend/app 下已经有对应路由，partial 必须在 x-impl-gap 写清差距；
+    not-implemented 表示现在调用会得到 404，不代表已经可用。
+    浏览器打开的 /docs 是运行时权威，本文件是目标契约。
+
+    已登记未决项见本文件末尾 x-open-questions。
+servers:
+  - url: /
+    description: 首版按同源部署；开发期由 VITE_API_BASE 指定
+
+tags:
+  - name: 认证
+  - name: 设备
+  - name: 命令
+  - name: 事件
+  - name: 表情
+  - name: 运维
+
+security:
+  - bearerAuth: []
+
+paths:
+  /api/auth/register:
+    post:
+      tags: [认证]
+      summary: 注册普通账号
+      description: |
+        普通身份、无设备，不赋 admin（06 第3节）。
+        业务错误（HTTP200）：40002 用户名或密码不合法，40900 用户名已存在。
+      operationId: registerUser
+      security: []
+      x-impl-status: partial
+      x-impl-gap: backend/app/routers/auth.py 的 user_out 不返回 id，name 用 username 冒充；密码哈希与强度未按 02:218 收敛
+      x-business-errors: [40002, 40900]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/UserResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/auth/login:
+    post:
+      tags: [认证]
+      summary: 登录换 token
+      description: |
+        返回 token 与 User。失败语义见 x-open-questions 第1条（现实现为 HTTP200 + 40001）。
+      operationId: login
+      security: []
+      x-impl-status: partial
+      x-impl-gap: token 未携带 tv；User 缺 id；失败返回 HTTP200+40001 而 06:19 只定义了 401+40101
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/LoginResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/auth/me:
+    get:
+      tags: [认证]
+      summary: 当前登录者
+      operationId: getMe
+      x-impl-status: partial
+      x-impl-gap: 未校验 tv 与账号状态；User 缺 id
+      responses:
+        '200':
+          $ref: '#/components/responses/UserResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/auth/logout:
+    post:
+      tags: [认证]
+      summary: 登出全部会话
+      description: |
+        tv+1，全部会话失效（06:68）。这是登出，不等于注销账号；注销见 DELETE /api/auth/account。
+      operationId: logout
+      x-impl-status: not-implemented
+      responses:
+        '200':
+          $ref: '#/components/responses/LogoutResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/auth/password:
+    put:
+      tags: [认证]
+      summary: 修改密码
+      description: |
+        成功后 tv+1，要求重新登录（06:69）。新密码规则见 02:218（Argon2id，10～128 字符）。
+      operationId: changePassword
+      x-impl-status: not-implemented
+      x-business-errors: [40002, 40101]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordChangeRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/PasswordChangeResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/auth/account:
+    delete:
+      tags: [认证]
+      summary: 注销账号
+      description: |
+        请求体放在 DELETE 上，字段见 06:70。立即撤权，返回 revoking，清理最终转 revoked。
+        注销同事务内 tv+1 与解绑同时发生，在途连接按关闭码 1004 处理（06:157）。
+      operationId: deleteAccount
+      x-impl-status: not-implemented
+      x-business-errors: [40002, 40101, 40900]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountDeleteRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/AccountDeleteResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/setup/status:
+    get:
+      tags: [运维]
+      summary: 初始化提示（匿名）
+      description: |
+        仅提示、不锁普通登录（06:71）。无 admin 时也允许合法普通用户登录。
+        前端不得用它的失败结果禁用登录按钮（03:72、05 的 N39）。
+      operationId: getSetupStatus
+      security: []
+      x-impl-status: not-implemented
+      responses:
+        '200':
+          $ref: '#/components/responses/SetupStatusResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/devices:
+    get:
+      tags: [设备]
+      summary: 本人设备列表
+      description: |
+        只含本人设备，允许空数组（06:72）。
+      operationId: listDevices
+      x-impl-status: partial
+      x-impl-gap: backend/app/routers/devices.py 返回全部设备，未按 owner 过滤；battery 缺失时回填 0 而不是 null
+      responses:
+        '200':
+          $ref: '#/components/responses/DeviceListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/devices/claimable:
+    get:
+      tags: [设备]
+      summary: 可认领设备
+      description: |
+        只返回可认领且已完成交接的设备，字段仅 id 与 name，不含 owner（06:76）。
+        路由顺序：本路径必须在 /api/devices/{id} 之前注册，或把 {id} 显式限定为数字类型，
+        否则集合路径会被 {id} 吞掉（06:87）。
+      operationId: listClaimableDevices
+      x-impl-status: not-implemented
+      responses:
+        '200':
+          $ref: '#/components/responses/ClaimableListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/devices/claim:
+    post:
+      tags: [设备]
+      summary: 用配对码认领设备
+      description: |
+        事务消费配对码（06:77）。每账号至多一台设备，冲突为 40900。
+        业务错误（HTTP200）：40002 码格式不合法，40400 设备不可见，40900 已被占用或码无效。
+      operationId: claimDevice
+      x-impl-status: not-implemented
+      x-business-errors: [40002, 40400, 40900]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClaimRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/DeviceResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/devices/{id}:
+    parameters:
+      - $ref: '#/components/parameters/DeviceId'
+    get:
+      tags: [设备]
+      summary: 单台设备
+      operationId: getDevice
+      x-impl-status: not-implemented
+      x-business-errors: [40400]
+      responses:
+        '200':
+          $ref: '#/components/responses/DeviceResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      tags: [设备]
+      summary: 重命名设备
+      description: |
+        name 为 1～64 字符；保留已有 renameDevice 调用（06:74）。
+      operationId: renameDevice
+      x-impl-status: not-implemented
+      x-business-errors: [40002, 40400]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DevicePatchRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/DeviceResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/devices/{id}/status:
+    parameters:
+      - $ref: '#/components/parameters/DeviceId'
+    get:
+      tags: [设备]
+      summary: 设备状态快照
+      description: |
+        未知业务字段返回 null，不回填 0（06:40、06:44）。
+      operationId: getDeviceStatus
+      x-impl-status: not-implemented
+      x-business-errors: [40400]
+      responses:
+        '200':
+          $ref: '#/components/responses/DeviceStatusResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/devices/{id}/binding:
+    parameters:
+      - $ref: '#/components/parameters/DeviceId'
+    delete:
+      tags: [设备]
+      summary: 解绑设备
+      description: |
+        confirm_device_id 必须等于路径 id（06:78）。解绑不是急停：提交前已经写出的动作可能继续（06:247）。
+      operationId: unbindDevice
+      x-impl-status: not-implemented
+      x-business-errors: [40002, 40400, 40900]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BindingDeleteRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/BindingDeleteResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/commands/send:
+    post:
+      tags: [命令]
+      summary: 提交动作命令
+      description: |
+        先持久化再入队（06:79）。幂等键由前端生成，放在 Idempotency-Key 头，
+        与返回的 cmd_id 是同一个 UUID（06:96）。同键同体返回原单，即使设备 busy 也不另发；
+        同键异体返回 40900 idempotency_conflict。没有创建命令的 busy/offline/unsupported 不占 key（06:94）。
+        业务错误（HTTP200）：40002 值非法或动作未启用，40400 设备不可见，40900 冲突或忙。
+      operationId: sendCommand
+      x-impl-status: not-implemented
+      x-business-errors: [40002, 40400, 40900]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: 前端生成的 UUID；重试必须复用同一个值，禁止自动换 key
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommandSendRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/CommandReceiptResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/commands/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: 命令 UUID，即提交时的 Idempotency-Key
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [命令]
+      summary: 查询命令回执
+      description: |
+        按 actor/owner/be 过滤（06:80）。HTTP 40400 表示不可查询，不等于 done（06:140）。
+      operationId: getCommand
+      x-impl-status: not-implemented
+      x-business-errors: [40400]
+      responses:
+        '200':
+          $ref: '#/components/responses/CommandReceiptResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/events/ticket:
+    post:
+      tags: [事件]
+      summary: 取一次性 WS ticket
+      description: |
+        ticket 绑定 uid/tv/device/be，30 秒一次性（06:144）。JWT 不得进 URL（06:82）。
+      operationId: issueTicket
+      x-impl-status: not-implemented
+      x-business-errors: [40002, 40400]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TicketRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/TicketResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/faces:
+    get:
+      tags: [表情]
+      summary: 七个表情预设
+      description: |
+        权威来源是后端的 id 0..6、name、builtin、preview（06:89）；
+        frontend/src/constants/faces.ts 只是渲染副本，两边不一致时改前端。
+        上传/删除自定义表情首版不实现。
+      operationId: listFaces
+      x-impl-status: not-implemented
+      responses:
+        '200':
+          $ref: '#/components/responses/FaceListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/faces/current:
+    post:
+      tags: [表情]
+      summary: 切换当前表情
+      description: |
+        仅入队，不代表设备已经显示（06:84）。
+      operationId: setCurrentFace
+      x-impl-status: not-implemented
+      x-business-errors: [40002, 40400, 40900]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FaceCurrentRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/FaceCurrentResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/health:
+    get:
+      tags: [运维]
+      summary: 健康检查
+      description: |
+        mode 来自配置而不是写死（02:279）；不含 COM 口与秘密（06:85）。
+      operationId: getHealth
+      security: []
+      x-impl-status: partial
+      x-impl-gap: backend/app/main.py 把 mode 硬编码为 serial，且不返回 protocol_version
+      responses:
+        '200':
+          $ref: '#/components/responses/HealthResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+x-ws-endpoints:
+  - path: /ws/device
+    owner: BA
+    query:
+      - name: device_id
+        required: true
+        schema:
+          type: integer
+      - name: ticket
+        required: true
+        description: 来自 POST /api/events/ticket 的一次性票据；JWT 不得进 URL
+        schema:
+          type: string
+    events:
+      $ref: '#/components/schemas/WsEvent'
+    close_codes:
+      $ref: '#/components/schemas/CloseCode'
+    note: |
+      WebSocket 不是 OpenAPI path；本段只登记握手参数、事件名与关闭码，
+      行为规则见 06 第5节，关闭码唯一登记处是 06:147-155。
+
+x-open-questions:
+  - id: Q1
+    question: 登录失败该用哪个语义
+    detail: |
+      06:19 只定义了身份无效 = HTTP401+40101；现实现返回 HTTP200+40001。
+      本文件暂按现实现以外的语义不写死，login 的失败响应未登记为 200 或 401。
+      裁决后必须同时改 06 与本文件。
+  - id: Q2
+    question: reason 与 retry_after 的落点
+    detail: |
+      06:20 说错误可加 reason/retry_after，同一行又说响应错误 data=null。
+      本文件暂定两者放顶层，data 仍为 null；若改为放进 data，必须同时改 06:20。
+  - id: Q3
+    question: 注册密码规则
+    detail: |
+      02:218 对新密码要求 Argon2id、10～128 字符；现实现为 6 位以上。
+      本文件不给 RegisterRequest.password 写长度上限，等 06 明确后再定。
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    DeviceId:
+      name: id
+      in: path
+      required: true
+      description: 设备数字主键
+      schema:
+        type: integer
+        minimum: 1
+
+  responses:
+    UserResponse:
+      description: 单用户
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                required: [data]
+                properties:
+                  code:
+                    type: integer
+                    enum: [0]
+                  data:
+                    $ref: '#/components/schemas/User'
+    LoginResponse:
+      description: 登录成功
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                required: [data]
+                properties:
+                  code:
+                    type: integer
+                    enum: [0]
+                  data:
+                    $ref: '#/components/schemas/LoginResult'
+    LogoutResponse:
+      description: 登出成功
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                required: [data]
+                properties:
+                  code:
+                    type: integer
+                    enum: [0]
+                  data:
+                    $ref: '#/components/schemas/LogoutResult'
+    PasswordChangeResponse:
+      description: 改密成功
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                required: [data]
+                properties:
+                  code:
+                    type: integer
+                    enum: [0]
+                  data:
+                    $ref: '#/components/schemas/PasswordChangeResult'
+    AccountDeleteResponse:
+      description: 注销已受理
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                required: [data]
+                properties:
+                  code:
+                    type: integer
+                    enum: [0]
+                  data:
+                    $ref: '#/components/schemas/AccountDeleteResult'
+    SetupStatusResponse:
+      description: 初始化提示
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                required: [data]
+                properties:
+                  code:
+                    type: integer
+                    enum: [0]
+                  data:
+                    $ref: '#/components/schemas/SetupStatus'
+    DeviceListResponse:
+      description: 设备数组
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                required: [data]
+                properties:
+                  code:
+                    type: integer
+                    enum: [0]
+                  data:
+                    $ref: '#/components/schemas/DeviceList'
+    ClaimableListResponse:
+      description: 可认领设备数组
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                required: [data]
+                properties:
+                  code:
+                    type: integer
+                    enum: [0]
+                  data:
+                    $ref: '#/components/schemas/ClaimableList'
+    DeviceResponse:
+      description: 单台设备
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                required: [data]
+                properties:
+                  code:
+                    type: integer
+                    enum: [0]
+                  data:
+                    $ref: '#/components/schemas/Device'
+    DeviceStatusResponse:
+      description: 设备状态
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                required: [data]
+                properties:
+                  code:
+                    type: integer
+                    enum: [0]
+                  data:
+                    $ref: '#/components/schemas/DeviceStatus'
+    BindingDeleteResponse:
+      description: 解绑成功
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                required: [data]
+                properties:
+                  code:
+                    type: integer
+                    enum: [0]
+                  data:
+                    $ref: '#/components/schemas/BindingDeleteResult'
+    CommandReceiptResponse:
+      description: 命令回执
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                required: [data]
+                properties:
+                  code:
+                    type: integer
+                    enum: [0]
+                  data:
+                    $ref: '#/components/schemas/CommandReceipt'
+    TicketResponse:
+      description: 一次性票据
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                required: [data]
+                properties:
+                  code:
+                    type: integer
+                    enum: [0]
+                  data:
+                    $ref: '#/components/schemas/Ticket'
+    FaceListResponse:
+      description: 表情预设数组
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                required: [data]
+                properties:
+                  code:
+                    type: integer
+                    enum: [0]
+                  data:
+                    $ref: '#/components/schemas/FaceList'
+    FaceCurrentResponse:
+      description: 表情已入队
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                required: [data]
+                properties:
+                  code:
+                    type: integer
+                    enum: [0]
+                  data:
+                    $ref: '#/components/schemas/FaceCurrentResult'
+    HealthResponse:
+      description: 健康状态
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                required: [data]
+                properties:
+                  code:
+                    type: integer
+                    enum: [0]
+                  data:
+                    $ref: '#/components/schemas/Health'
+    Unauthorized:
+      description: 身份无效（HTTP401 + 40101）
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    Forbidden:
+      description: 无管理员能力（HTTP403 + 40300）
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    TooManyRequests:
+      description: 限流（HTTP429 + 42900，带 retry_after）
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    InternalError:
+      description: 内部失败（HTTP500 + 50000，无堆栈与内部路径）
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    BusinessError:
+      description: |
+        业务错误：HTTP200，code 非 0，data 必为 null。
+        40000 参数缺失或结构错误、40002 值非法、40400 不存在或不属于我、40900 冲突。
+        规则来源 06:18；身份/限流/内部失败不走本响应，见 40101/40300/42900/50000。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+
+  schemas:
+    Envelope:
+      type: object
+      description: 统一外壳；data 在成功时有内容，在业务错误时为 null
+      required: [code, message, data, timestamp]
+      properties:
+        code:
+          type: integer
+          description: 0 表示成功；非 0 是业务或系统错误码
+        message:
+          type: string
+          description: 可直接展示的中文说明；前端不得解析它做分支
+        data: {}
+        timestamp:
+          type: integer
+          description: 毫秒整数
+
+    ErrorEnvelope:
+      type: object
+      description: 错误外壳；data 恒为 null（06:20）
+      required: [code, message, data, timestamp]
+      properties:
+        code:
+          type: integer
+          minimum: 1
+          description: 非 0；OpenAPI 3.0 下用 minimum 表达，不使用 3.1 的数值型 exclusiveMinimum
+        message:
+          type: string
+        data:
+          nullable: true
+        timestamp:
+          type: integer
+        reason:
+          type: string
+          description: 可选，机器可读的失败原因；见 x-open-questions 第2条
+        retry_after:
+          type: integer
+          description: 可选，仅 429 返回，单位秒；见 x-open-questions 第2条
+
+    User:
+      type: object
+      required: [id, username, name, role]
+      properties:
+        id:
+          type: integer
+        username:
+          type: string
+        name:
+          type: string
+        role:
+          type: string
+          enum: [admin, user]
+
+    LoginResult:
+      type: object
+      required: [token, user]
+      properties:
+        token:
+          type: string
+        user:
+          $ref: '#/components/schemas/User'
+
+    LogoutResult:
+      type: object
+      required: [logged_out]
+      properties:
+        logged_out:
+          type: boolean
+          enum: [true]
+
+    PasswordChangeResult:
+      type: object
+      required: [reauth_required]
+      properties:
+        reauth_required:
+          type: boolean
+          enum: [true]
+
+    AccountDeleteResult:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [revoking]
+
+    SetupStatus:
+      type: object
+      required: [setup_required]
+      properties:
+        setup_required:
+          type: boolean
+
+    Device:
+      type: object
+      required: [id, name, online, firmware, binding_state, control_state, supported_actions]
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        online:
+          type: boolean
+        firmware:
+          type: string
+        last_heartbeat:
+          type: string
+          format: date-time
+          nullable: true
+        battery:
+          type: integer
+          nullable: true
+        location:
+          type: string
+        binding_state:
+          type: string
+          enum: [claimable, bound, retired]
+        control_state:
+          type: string
+          enum: [unconfigured, offline, ready, busy, recovery_required, handover_required, faulted]
+        supported_actions:
+          type: array
+          description: 本期启用 0x30～0x36，值域 48～54
+          items:
+            type: integer
+            minimum: 48
+            maximum: 54
+
+    DeviceList:
+      type: array
+      items:
+        $ref: '#/components/schemas/Device'
+
+    ClaimableDevice:
+      type: object
+      description: 不含 owner 字段
+      required: [id, name]
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+
+    ClaimableList:
+      type: array
+      items:
+        $ref: '#/components/schemas/ClaimableDevice'
+
+    DeviceStatus:
+      type: object
+      required: [device_id, online, control_state, session_id, state_revision, updated_at]
+      properties:
+        device_id:
+          type: integer
+        online:
+          type: boolean
+        control_state:
+          type: string
+          enum: [unconfigured, offline, ready, busy, recovery_required, handover_required, faulted]
+        session_id:
+          type: string
+          nullable: true
+        state_revision:
+          type: integer
+          minimum: 0
+        battery:
+          type: integer
+          nullable: true
+          description: 0～100；255 表示未知，转 null
+        voltage:
+          type: number
+          nullable: true
+          description: 单位 V；固件 mV 除 1000
+        action:
+          type: integer
+          nullable: true
+        face:
+          type: integer
+          nullable: true
+        music_state:
+          type: integer
+          nullable: true
+        track:
+          type: integer
+          nullable: true
+        volume:
+          type: integer
+          nullable: true
+        weather_code:
+          type: integer
+          nullable: true
+        temp:
+          type: integer
+          nullable: true
+          description: 单位摄氏度
+        updated_at:
+          type: string
+          format: date-time
+
+    CommandReceipt:
+      type: object
+      required: [cmd_id, device_id, action, status, revision, created_at, updated_at]
+      properties:
+        cmd_id:
+          type: string
+          format: uuid
+          description: 与数据库 command_log.msg_id 是同一个值（06:96）
+        device_id:
+          type: integer
+        action:
+          type: integer
+          minimum: 48
+          maximum: 54
+        seq:
+          type: integer
+          nullable: true
+        status:
+          type: string
+          enum: [pending, accepted, done, rejected, unknown, superseded, legacy_unmapped]
+        transport:
+          type: string
+          nullable: true
+          enum: [ok, write_failed, partial_write]
+        reason:
+          type: string
+          nullable: true
+        error_code:
+          type: integer
+          nullable: true
+        revision:
+          type: integer
+          minimum: 0
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    Ticket:
+      type: object
+      required: [ticket, expires_in_sec]
+      properties:
+        ticket:
+          type: string
+        expires_in_sec:
+          type: integer
+          enum: [30]
+
+    FaceItem:
+      type: object
+      required: [id, name, builtin]
+      properties:
+        id:
+          type: integer
+          minimum: 0
+          maximum: 6
+        name:
+          type: string
+        builtin:
+          type: boolean
+        preview:
+          type: string
+          nullable: true
+
+    FaceList:
+      type: array
+      items:
+        $ref: '#/components/schemas/FaceItem'
+
+    FaceCurrentResult:
+      type: object
+      required: [face, dispatched]
+      properties:
+        face:
+          type: integer
+          minimum: 0
+          maximum: 6
+        dispatched:
+          type: boolean
+          enum: [true]
+
+    Health:
+      type: object
+      required: [status, mode, protocol_version]
+      properties:
+        status:
+          type: string
+        mode:
+          type: string
+          enum: [sim, serial]
+        protocol_version:
+          type: string
+
+    BindingDeleteResult:
+      type: object
+      required: [unbound, handover_required]
+      properties:
+        unbound:
+          type: boolean
+          enum: [true]
+        handover_required:
+          type: boolean
+          enum: [true]
+
+    RegisterRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 20
+          description: 字母、数字、下划线或中文
+        password:
+          type: string
+          description: 规则见 x-open-questions 第3条
+
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+
+    PasswordChangeRequest:
+      type: object
+      required: [old_password, new_password]
+      properties:
+        old_password:
+          type: string
+        new_password:
+          type: string
+          minLength: 10
+          maxLength: 128
+
+    AccountDeleteRequest:
+      type: object
+      required: [password, confirm_username]
+      properties:
+        password:
+          type: string
+        confirm_username:
+          type: string
+
+    DevicePatchRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+
+    ClaimRequest:
+      type: object
+      required: [device_id, code]
+      properties:
+        device_id:
+          type: integer
+        code:
+          type: string
+          minLength: 6
+          maxLength: 6
+          description: 6 位配对码；仅明文输出一次
+
+    BindingDeleteRequest:
+      type: object
+      required: [confirm_device_id]
+      properties:
+        confirm_device_id:
+          type: integer
+          description: 必须等于路径 id
+
+    CommandSendRequest:
+      type: object
+      required: [device_id, action]
+      properties:
+        device_id:
+          type: integer
+        action:
+          type: integer
+          enum: [48, 49, 50, 51, 52, 53, 54]
+          description: 本期七个动作码 0x30～0x36；其余码表保留名称但禁用
+
+    TicketRequest:
+      type: object
+      required: [device_id]
+      properties:
+        device_id:
+          type: integer
+
+    FaceCurrentRequest:
+      type: object
+      required: [device_id, face]
+      properties:
+        device_id:
+          type: integer
+        face:
+          type: integer
+          minimum: 0
+          maximum: 6
+
+    WsEvent:
+      type: object
+      description: 保留现有 {event,data} 入口，新增字段放 data（06:125）
+      required: [event, data]
+      properties:
+        event:
+          type: string
+          enum: [command, state, link, ping, ack, music, weather]
+        data: {}
+
+    CloseCode:
+      type: object
+      description: 关闭码唯一登记处是 06:147-155，这里只做机器投影
+      properties:
+        '1000':
+          type: string
+          enum: [用户主动关闭、页面卸载]
+        '1001':
+          type: string
+          enum: [服务端重启或进程内非预期异常]
+        '1004':
+          type: string
+          enum: [身份失效]
+        '1008':
+          type: string
+          enum: [设备归属丢失]
+        '4003':
+          type: string
+          enum: [ticket 无效、过期或已使用]
+        '4009':
+          type: string
+          enum: [同一用户同一设备连接数已达上限 3]
+        '1011':
+          type: string
+          enum: [服务端内部错误、队列溢出]

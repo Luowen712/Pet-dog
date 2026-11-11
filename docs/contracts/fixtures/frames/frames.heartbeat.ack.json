@@ -1,0 +1,12 @@
+{
+  "id": "frames.heartbeat.ack",
+  "direction": "device->host",
+  "cmd": "0x84",
+  "name": "心跳回复（收 04 后回一次）",
+  "rule": "06:220 不因 84 再回复；06:228 官方向量5",
+  "data": [],
+  "data_fields": [],
+  "hex": "AA 55 00 84 7B",
+  "sum": "0x7B",
+  "sum_rule": "SUM = ~(LEN + CMD + ΣDATA) & 0xFF，不是 CRC；LEN = DATA 长度，总长 = LEN + 5"
+}

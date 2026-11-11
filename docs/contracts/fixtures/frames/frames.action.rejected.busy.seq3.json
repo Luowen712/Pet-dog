@@ -1,0 +1,18 @@
+{
+  "id": "frames.action.rejected.busy.seq3",
+  "direction": "device->host",
+  "cmd": "0x05",
+  "name": "关联拒绝（设备忙，seq=3）",
+  "rule": "06:217；06:227 错误码 04=设备忙",
+  "data": [
+    "0x04",
+    "0x03"
+  ],
+  "data_fields": [
+    "error_code=0x04（设备忙）",
+    "seq=3"
+  ],
+  "hex": "AA 55 02 05 04 03 F1",
+  "sum": "0xF1",
+  "sum_rule": "SUM = ~(LEN + CMD + ΣDATA) & 0xFF，不是 CRC；LEN = DATA 长度，总长 = LEN + 5"
+}

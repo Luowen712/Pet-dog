@@ -1,0 +1,15 @@
+{
+  "id": "http.error.42900.rate_limited",
+  "method": "POST",
+  "path": "/api/auth/login",
+  "http_status": 429,
+  "rule": "06:19 限流；retry_after 单位为秒（06:20）",
+  "response": "TooManyRequests",
+  "body": {
+    "code": 42900,
+    "message": "请求过于频繁",
+    "data": null,
+    "timestamp": 1731210000000,
+    "retry_after": 60
+  }
+}
