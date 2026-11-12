@@ -29,6 +29,7 @@ export function setStoredUser(user: User): void {
 export function clearSession(): void {
   localStorage.removeItem(TOKEN_KEY)
   localStorage.removeItem(USER_KEY)
+  localStorage.removeItem(DEVICE_KEY)
 }
 
 export function getStoredDeviceId(): number {

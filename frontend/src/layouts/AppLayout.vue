@@ -57,6 +57,7 @@ function onCommand(command: string | number | object): void {
 
 function logout(): void {
   pet.reset()
+  deviceStore.reset()
   auth.reset()
   void router.replace('/login')
 }

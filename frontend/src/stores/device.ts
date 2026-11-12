@@ -39,5 +39,12 @@ export const useDeviceStore = defineStore('device', () => {
     setStoredDeviceId(id)
   }
 
-  return { devices, loading, loaded, currentId, current, onlineCount, load, rename, select }
+  function reset(): void {
+    devices.value = []
+    loading.value = false
+    loaded.value = false
+    currentId.value = 1
+  }
+
+  return { devices, loading, loaded, currentId, current, onlineCount, load, rename, select,reset }
 })
