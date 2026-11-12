@@ -10,3 +10,6 @@ PyJWT==2.15.1
 python-multipart==0.0.33
 PyMySQL==1.1.2
 cryptography==50.0.2
+
+alembic==1.20.1
+argon2-cffi==25.1.0

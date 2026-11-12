@@ -1,0 +1,26 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/devices/1/status",
+    "body": null
+  },
+  "status_code": 200,
+  "body": {
+    "code": 0,
+    "message": "ok",
+    "data": {
+      "device_id": 1,
+      "battery": 82,
+      "voltage": 0.0,
+      "action": 1,
+      "face": 0,
+      "music_state": 0,
+      "track": 1,
+      "volume": 15,
+      "weather_code": 0,
+      "temp": 0,
+      "updated_at": "2026-11-08T20:33:32+08:00"
+    },
+    "timestamp": 1794493192629
+  }
+}

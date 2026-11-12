@@ -1,0 +1,17 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/api/auth/login",
+    "body": {
+      "username": "admin",
+      "password": "__wrong__"
+    }
+  },
+  "status_code": 200,
+  "body": {
+    "code": 40001,
+    "message": "用户名或密码错误",
+    "data": null,
+    "timestamp": 1794493192641
+  }
+}

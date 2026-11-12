@@ -46,6 +46,9 @@ hardware/**/History/
 *.iml
 *.code-workspace
 
+# 项目记忆与工具本地状态（每人一份，不进仓库）
+.workbuddy/
+
 # 系统
 .DS_Store
 ~$*
