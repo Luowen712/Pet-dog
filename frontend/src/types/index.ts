@@ -7,6 +7,7 @@ export interface ApiResponse<T> {
 }
 
 export interface User {
+  id: number
   username: string
   name: string
   role: string
@@ -17,31 +18,52 @@ export interface LoginResult {
   user: User
 }
 
+export type BindingState = 'claimable' | 'bound' | 'retired'
+
+export type ControlState =
+  | 'unconfigured'
+  | 'offline'
+  | 'ready'
+  | 'busy'
+  | 'recovery_required'
+  | 'handover_required'
+  | 'faulted'
+
 export interface Device {
   id: number
   name: string
   online: boolean
   firmware: string
-  last_heartbeat: string
-  battery: number
+  last_heartbeat: string | null
+  battery: number | null
   location?: string
+  binding_state: BindingState
+  control_state: ControlState
+  supported_actions: number[]
+}
+
+export interface ClaimableDevice {
+  id: number
+  name: string
 }
 
 export interface DeviceStatus {
   device_id: number
-  battery: number
-  voltage: number
-  action: number
-  face: number
-  music_state: number
-  track: number
-  volume: number
-  weather_code: number
-  temp: number
+  online: boolean
+  control_state: ControlState
+  session_id: string | null
+  state_revision: number
+  battery: number | null
+  voltage: number | null
+  action: number | null
+  face: number | null
+  music_state: number | null
+  track: number | null
+  volume: number | null
+  weather_code: number | null
+  temp: number | null
   updated_at: string
 }
-
-export type CommandState = 'OK' | 'TIMEOUT' | 'ERROR' | 'PENDING'
 
 export type CommandStatus =
   | 'pending'
@@ -50,6 +72,7 @@ export type CommandStatus =
   | 'rejected'
   | 'unknown'
   | 'superseded'
+  | 'legacy_unmapped'
 
 export type TransportStatus = 'ok' | 'write_failed' | 'partial_write'
 
@@ -58,14 +81,33 @@ export interface CommandReceipt {
   cmd_id: string
   device_id: number
   action: number
-  seq?: number
+  seq: number | null
   status: CommandStatus
-  transport: TransportStatus
-  error_code?: number | null
+  transport: TransportStatus | null
+  reason: string | null
+  error_code: number | null
+  revision: number
   created_at: string
   updated_at: string
-  finished_at?: string | null
+  finished_at: string | null
 }
+
+export interface FaceItem {
+  id: number
+  name: string
+  builtin: boolean
+  preview?: string | null
+}
+
+export interface AckData {
+  cmd_id?: string
+  seq: number
+  status: 'OK' | 'ERROR'
+  cost_ms: number
+}
+
+/** 已关闭页面的历史类型：代码保留，路由与导航不再暴露 */
+export type CommandState = 'OK' | 'TIMEOUT' | 'ERROR' | 'PENDING'
 
 export interface CommandLog {
   id: number
@@ -104,46 +146,46 @@ export interface Scene {
   updated_at: string
 }
 
-export interface FaceItem {
-  id: number
-  name: string
-  builtin: boolean
-  preview?: string
-}
-
 export interface WeatherInfo {
   code: number
   text: string
   temp: number
   updated_at: string
-  /** 可选的展示信息：数据地点与来源，后端不返回时前端用默认地点兜底 */
   location?: string
   source?: string
 }
 
-export interface AckData {
-  /** 后端补上的命令主键；0x81 帧只带 1 字节 seq，映射表 30 秒后作废，此时可能缺失 */
-  cmd_id?: string
-  seq: number
-  status: 'OK' | 'ERROR'
-  cost_ms: number
-}
-
 export interface StateData {
-  battery: number
-  voltage: number
-  action: number
-  face: number
-  music_state: number
-  track: number
-  weather_code: number
-  temp: number
+  device_id?: number
+  online?: boolean
+  control_state?: ControlState
+  session_id?: string | null
+  state_revision?: number
+  battery: number | null
+  voltage: number | null
+  action: number | null
+  face: number | null
+  music_state?: number | null
+  track?: number | null
+  volume?: number | null
+  weather_code?: number | null
+  temp?: number | null
 }
 
 export interface LinkData {
+  device_id: number
   online: boolean
+  control_state: ControlState
+  reason: string | null
+  session_id: string | null
+  state_revision: number
 }
 
+export interface PingData {
+  server_time: string
+}
+
+/** 音乐/天气本期关闭，事件类型保留给隐藏组件编译 */
 export interface MusicData {
   state: number
   track: number
@@ -158,8 +200,10 @@ export interface WeatherData {
 
 export type WsEvent =
   | { event: 'state'; data: StateData }
+  | { event: 'command'; data: CommandReceipt }
   | { event: 'ack'; data: AckData }
   | { event: 'link'; data: LinkData }
+  | { event: 'ping'; data: PingData }
   | { event: 'music'; data: MusicData }
   | { event: 'weather'; data: WeatherData }
 

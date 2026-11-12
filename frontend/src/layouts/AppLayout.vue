@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowDown } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import BrandMark from '@/components/BrandMark.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useDeviceStore } from '@/stores/device'
@@ -15,6 +16,10 @@ const pet = usePetStore()
 
 const mockMode = import.meta.env.VITE_USE_MOCK === 'true'
 const everConnected = ref(false)
+
+const switchVisible = ref(false)
+const switchLoading = ref(false)
+const switchForm = reactive({ username: '', password: '' })
 
 watch(
   () => pet.socketStatus,
@@ -30,14 +35,14 @@ const initial = computed(() => auth.user?.name?.slice(0, 1) ?? 'A')
 const navItems = [
   { path: '/devices', label: '设备', icon: 'Monitor' },
   { path: '/console', label: '控制台', icon: 'Odometer' },
-  { path: '/logs', label: '日志', icon: 'Document' },
-  { path: '/dashboard', label: '看板', icon: 'DataLine' },
   { path: '/faces', label: '表情', icon: 'Sunny' },
-  { path: '/scenes', label: '场景', icon: 'MagicStick' },
+  { path: '/account', label: '账号', icon: 'User' },
 ]
 
 onMounted(async () => {
-  void auth.refreshMe()
+  await auth.refreshMe()
+  if (!auth.uid) return
+  deviceStore.bindUser(auth.uid)
   if (!deviceStore.loaded) await deviceStore.load()
   pet.connect(deviceStore.currentId)
 })
@@ -52,13 +57,50 @@ function onDeviceChange(value: number): void {
 }
 
 function onCommand(command: string | number | object): void {
-  if (command === 'logout') logout()
+  if (command === 'logout') void logout()
+  if (command === 'account') void router.push('/account')
+  if (command === 'switch') openSwitch()
 }
 
-function logout(): void {
+function openSwitch(): void {
+  switchForm.username = ''
+  switchForm.password = ''
+  switchVisible.value = true
+}
+
+async function submitSwitch(): Promise<void> {
+  if (switchLoading.value) return
+  const username = switchForm.username.trim()
+  if (!username || !switchForm.password) {
+    ElMessage.warning('请输入要切换的账号和密码')
+    return
+  }
+
+  switchLoading.value = true
+  try {
+    // 直接换新 token，不需要先调 logout；旧账号在其它设备上的登录不受影响
+    await auth.login(username, switchForm.password)
+    pet.reset()
+    deviceStore.reset()
+    if (auth.uid) {
+      deviceStore.bindUser(auth.uid)
+      await deviceStore.load()
+    }
+    pet.connect(deviceStore.currentId)
+    switchVisible.value = false
+    ElMessage.success(`已切换到 ${auth.user?.name ?? username}`)
+    await router.replace('/devices')
+  } catch {
+    // 登录失败保留原账号，错误提示由 request 层统一弹出
+  } finally {
+    switchLoading.value = false
+  }
+}
+
+async function logout(): Promise<void> {
   pet.reset()
   deviceStore.reset()
-  auth.reset()
+  await auth.logoutAll()
   void router.replace('/login')
 }
 </script>
@@ -96,7 +138,7 @@ function logout(): void {
       <div class="actions">
         <span v-if="mockMode" class="mock mono">MOCK</span>
 
-        <label class="device">
+        <label v-if="deviceStore.devices.length > 0" class="device">
           <span class="device-label mono">DEVICE</span>
           <el-select
             :model-value="deviceStore.currentId"
@@ -132,7 +174,9 @@ function logout(): void {
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item disabled>{{ auth.user?.username ?? 'admin' }}</el-dropdown-item>
-              <el-dropdown-item divided command="logout">退出登录</el-dropdown-item>
+              <el-dropdown-item divided command="account">账号管理</el-dropdown-item>
+              <el-dropdown-item command="switch">切换账号</el-dropdown-item>
+              <el-dropdown-item command="logout">退出登录</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
@@ -152,6 +196,61 @@ function logout(): void {
         </transition>
       </router-view>
     </main>
+
+    <el-dialog
+      v-model="switchVisible"
+      title="切换账号"
+      width="400px"
+      class="switch-dialog"
+      :close-on-click-modal="!switchLoading"
+      :close-on-press-escape="!switchLoading"
+      @closed="switchForm.password = ''"
+    >
+      <div class="switch-body">
+        <div class="switch-current">
+          <span class="avatar mono">{{ initial }}</span>
+          <div class="switch-current-text">
+            <span class="mono switch-label">当前账号</span>
+            <strong>{{ auth.user?.name ?? '未登录' }}</strong>
+            <span class="mono">@{{ auth.user?.username ?? '--' }}</span>
+          </div>
+        </div>
+
+        <label class="switch-field">
+          <span class="switch-label mono">新账号</span>
+          <el-input
+            v-model="switchForm.username"
+            placeholder="用户名"
+            autocomplete="username"
+            :disabled="switchLoading"
+          />
+        </label>
+
+        <label class="switch-field">
+          <span class="switch-label mono">密码</span>
+          <el-input
+            v-model="switchForm.password"
+            type="password"
+            show-password
+            placeholder="输入新账号密码"
+            autocomplete="current-password"
+            :disabled="switchLoading"
+            @keyup.enter="submitSwitch"
+          />
+        </label>
+
+        <p class="switch-hint">
+          切换后会重新加载新账号的设备和实时连接。旧账号不会被登出，它在其它设备上的登录仍然有效。
+        </p>
+      </div>
+
+      <template #footer>
+        <el-button :disabled="switchLoading" @click="switchVisible = false">取消</el-button>
+        <el-button type="primary" :loading="switchLoading" @click="submitSwitch">
+          登录并切换
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -400,6 +499,63 @@ function logout(): void {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
+}
+
+.switch-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.switch-current {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--hair-soft);
+  background: rgba(247, 244, 238, 0.6);
+}
+
+.switch-current .avatar {
+  width: 40px;
+  height: 40px;
+  font-size: 16px;
+}
+
+.switch-current-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.switch-current-text strong {
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.switch-current-text .mono {
+  font-size: 9px;
+  color: var(--faint);
+}
+
+.switch-label {
+  font-size: 8px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.switch-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.switch-hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.65;
+  color: var(--dim);
 }
 
 @media (max-width: 1180px) {

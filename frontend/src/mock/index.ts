@@ -59,6 +59,9 @@ const devices: Device[] = [
     last_heartbeat: iso(-8000),
     battery: 78,
     location: '书桌',
+    binding_state: 'bound',
+    control_state: 'ready',
+    supported_actions: [48, 49, 50, 51, 52, 53, 54],
   },
   {
     id: 2,
@@ -68,6 +71,9 @@ const devices: Device[] = [
     last_heartbeat: iso(-2 * 60 * 60 * 1000),
     battery: 41,
     location: '客厅',
+    binding_state: 'bound',
+    control_state: 'offline',
+    supported_actions: [48, 49, 50, 51, 52, 53, 54],
   },
 ]
 
@@ -240,6 +246,7 @@ const MOCK_USERS_KEY = 'petdog_mock_users'
 const MOCK_SESSION_KEY = 'petdog_mock_session'
 
 interface MockUser {
+  id: number
   username: string
   password: string
   name: string
@@ -258,16 +265,18 @@ function writeUsers(users: MockUser[]): void {
   localStorage.setItem(MOCK_USERS_KEY, JSON.stringify(users))
 }
 
-function readSession(): { username: string; name: string; role: string } | null {
+function readSession(): { id: number; username: string; name: string; role: string } | null {
   try {
     const raw = localStorage.getItem(MOCK_SESSION_KEY)
-    return raw ? (JSON.parse(raw) as { username: string; name: string; role: string }) : null
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as { id?: number; username: string; name: string; role: string }
+    return { ...parsed, id: parsed.id ?? 1 }
   } catch {
     return null
   }
 }
 
-function saveSession(session: { username: string; name: string; role: string }): void {
+function saveSession(session: { id: number; username: string; name: string; role: string }): void {
   localStorage.setItem(MOCK_SESSION_KEY, JSON.stringify(session))
 }
 
@@ -306,7 +315,7 @@ export async function matchMock(config: AxiosRequestConfig): Promise<MockHit> {
     await delay(320)
     const username = String(body.username ?? '')
     const password = String(body.password ?? '')
-    const isAdmin = username === 'admin' && password === '123456'
+    const isAdmin = username === 'admin' && password === 'admin123'
     const account = readUsers().find((user) => user.username === username && user.password === password)
 
     if (!isAdmin && !account) {
@@ -314,8 +323,8 @@ export async function matchMock(config: AxiosRequestConfig): Promise<MockHit> {
     }
 
     const session = isAdmin
-      ? { username: 'admin', name: '管理员', role: 'admin' }
-      : { username: account!.username, name: account!.name, role: 'user' }
+      ? { id: 1, username: 'admin', name: '管理员', role: 'admin' }
+      : { id: account!.id, username: account!.username, name: account!.name, role: 'user' }
     saveSession(session)
 
     return hit({ token: `mock.${username}.${now()}`, user: session })
@@ -336,13 +345,13 @@ export async function matchMock(config: AxiosRequestConfig): Promise<MockHit> {
       throw new ApiError(40900, '用户名已存在')
     }
 
-    const account: MockUser = { username, password, name: username }
+    const account: MockUser = { id: readUsers().length + 2, username, password, name: username }
     writeUsers([...readUsers(), account])
-    return hit({ username: account.username, name: account.name })
+    return hit({ id: account.id, username: account.username, name: account.name, role: 'user' })
   }
 
   if (method === 'get' && path === '/auth/me') {
-    return hit(readSession() ?? { username: 'admin', name: '管理员', role: 'admin' })
+    return hit(readSession() ?? { id: 1, username: 'admin', name: '管理员', role: 'admin' })
   }
 
   /* 设备 */
@@ -417,7 +426,9 @@ export async function matchMock(config: AxiosRequestConfig): Promise<MockHit> {
       seq,
       status: 'pending',
       transport: 'ok',
+      reason: null,
       error_code: null,
+      revision: 1,
       created_at: createdAt,
       updated_at: createdAt,
       finished_at: null,

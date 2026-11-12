@@ -2,18 +2,20 @@
 import { computed } from 'vue'
 import { actionName } from '@/constants/actions'
 import { faceName } from '@/constants/faces'
-import { formatTrack } from '@/utils/format'
 import { usePetStore } from '@/stores/pet'
 
 const pet = usePetStore()
 
 const batteryColor = computed(() => {
+  if (pet.battery === null) return 'rgba(20,20,20,.2)'
   if (pet.battery > 50) return '#2f6b4f'
   if (pet.battery > 20) return '#9a6a1c'
   return '#a53a33'
 })
 
-const batteryPercent = computed(() => Math.max(0, Math.min(100, pet.battery)))
+const batteryPercent = computed(() =>
+  pet.battery === null ? 0 : Math.max(0, Math.min(100, pet.battery)),
+)
 </script>
 
 <template>
@@ -21,7 +23,9 @@ const batteryPercent = computed(() => Math.max(0, Math.min(100, pet.battery)))
     <div class="stat">
       <span class="stat-label mono">Battery</span>
       <div class="battery">
-        <span class="battery-num mono">{{ pet.battery }}<i>%</i></span>
+        <span class="battery-num mono">
+          {{ pet.battery ?? '--' }}<i>%</i>
+        </span>
         <el-progress
           class="battery-bar"
           :percentage="batteryPercent"
@@ -34,25 +38,19 @@ const batteryPercent = computed(() => Math.max(0, Math.min(100, pet.battery)))
 
     <div class="stat">
       <span class="stat-label mono">Voltage</span>
-      <span class="stat-value mono">{{ pet.voltage.toFixed(2) }} <i>V</i></span>
+      <span class="stat-value mono">
+        {{ pet.voltage === null ? '--' : pet.voltage.toFixed(2) }} <i>V</i>
+      </span>
     </div>
 
     <div class="stat">
       <span class="stat-label mono">Action</span>
-      <span class="stat-value">{{ actionName(pet.action) }}</span>
+      <span class="stat-value">{{ pet.action === null ? '—' : actionName(pet.action) }}</span>
     </div>
 
     <div class="stat">
       <span class="stat-label mono">Face</span>
-      <span class="stat-value">{{ faceName(pet.face) }}</span>
-    </div>
-
-    <div class="stat">
-      <span class="stat-label mono">Music</span>
-      <span class="stat-value">
-        {{ pet.musicLabel }}
-        <i class="mono track">{{ formatTrack(pet.track) }}</i>
-      </span>
+      <span class="stat-value">{{ pet.face === null ? '—' : faceName(pet.face) }}</span>
     </div>
 
     <div class="link">
@@ -65,7 +63,7 @@ const batteryPercent = computed(() => Math.max(0, Math.min(100, pet.battery)))
 <style scoped>
 .state-bar {
   display: grid;
-  grid-template-columns: 1.1fr 0.8fr 1fr 0.7fr 1.1fr auto;
+  grid-template-columns: 1.1fr 0.8fr 1fr 0.7fr auto;
   align-items: stretch;
   background: var(--panel);
   border: 1px solid var(--hair);
@@ -109,11 +107,6 @@ const batteryPercent = computed(() => Math.max(0, Math.min(100, pet.battery)))
   margin-left: 2px;
 }
 
-.track {
-  margin-left: 4px;
-  color: var(--dim);
-}
-
 .battery {
   display: flex;
   align-items: center;
@@ -151,14 +144,14 @@ const batteryPercent = computed(() => Math.max(0, Math.min(100, pet.battery)))
 
 @media (max-width: 1180px) {
   .state-bar {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .stat:nth-child(4) {
+  .stat:nth-child(odd) {
     border-left: 0;
   }
 
-  .stat:nth-child(n + 4) {
+  .stat:nth-child(n + 3) {
     border-top: 1px solid var(--hair-soft);
   }
 
@@ -169,16 +162,8 @@ const batteryPercent = computed(() => Math.max(0, Math.min(100, pet.battery)))
 }
 
 @media (max-width: 640px) {
-  .state-bar {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .stat:nth-child(odd) {
+  .stat {
     border-left: 0;
-  }
-
-  .stat:nth-child(n + 3) {
-    border-top: 1px solid var(--hair-soft);
   }
 
   .link {
