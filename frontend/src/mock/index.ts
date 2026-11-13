@@ -48,6 +48,20 @@ function bodyOf(config: AxiosRequestConfig): Record<string, unknown> {
   return {}
 }
 
+/** axios 的 headers 可能是 AxiosHeaders，也可能是普通对象 */
+function headerOf(config: AxiosRequestConfig, name: string): string | null {
+  const headers = config.headers as unknown
+  if (!headers || typeof headers !== 'object') return null
+  const get = (headers as { get?: unknown }).get
+  if (typeof get === 'function') {
+    const value = (get as (key: string) => unknown).call(headers, name)
+    if (typeof value === 'string') return value
+  }
+  const record = headers as Record<string, unknown>
+  const value = record[name] ?? record[name.toLowerCase()]
+  return typeof value === 'string' ? value : null
+}
+
 /* ------------------------------- 假数据 ------------------------------- */
 
 const devices: Device[] = [
@@ -400,7 +414,13 @@ export async function matchMock(config: AxiosRequestConfig): Promise<MockHit> {
   if (method === 'post' && path === '/commands/send') {
     const action = Number(body.action)
     if (!Number.isFinite(action)) throw new ApiError(40002, '动作码不合法')
-    const cmdId = newCmdId()
+    // 契约：Idempotency-Key 就是 cmd_id，同键同体返回原单，不能另生成一个
+    const cmdId = headerOf(config, 'Idempotency-Key') ?? newCmdId()
+    const existing = receipts.get(cmdId)
+    if (existing) {
+      if (existing.action !== action) throw new ApiError(40900, '幂等键对应了不同的动作')
+      return hit(existing)
+    }
     const seq = runtime.nextSeq()
     const startedAt = now()
     const createdAt = iso()
@@ -444,6 +464,8 @@ export async function matchMock(config: AxiosRequestConfig): Promise<MockHit> {
       receipt.updated_at = iso()
       receipt.finished_at = receipt.updated_at
       runtime.emit({ event: 'ack', data: { cmd_id: cmdId, seq, status: 'OK', cost_ms: cost } })
+      // 契约要求命令生命周期也要推 command 事件；少了它前端永远等不到 done
+      runtime.emit({ event: 'command', data: { ...receipt } })
       runtime.emit({ event: 'state', data: runtime.snapshot() })
     }, 520 + Math.floor(Math.random() * 620))
 

@@ -29,6 +29,10 @@ export type ButtonState = 'idle' | 'pending' | 'accepted' | 'ok' | 'fail' | 'unk
 
 /** 命令长时间没有任何回执，显示"结果不明"；它不是终态，后端如果后续 done 仍会纠正 */
 const DISPLAY_TIMEOUT_MS = 8000
+/** 完成后的绿灯停留时间，到点自动熄灭 */
+const OK_HOLD_MS = 1500
+/** 未完成（拒绝/结果不明）的黄灯停留时间，到点自动熄灭 */
+const UNFINISHED_HOLD_MS = 5000
 /** pending 映射的保留窗口，避免无限增长 */
 const PENDING_RETIRE_MS = 60000
 /** 一次对账最多查 20 条，契约明确要求不要无限查 */
@@ -76,6 +80,10 @@ export const usePetStore = defineStore('pet', () => {
   const status = ref<Record<number, ButtonState>>({})
   /** cmd_id → 命令。只有后端 done 才会变绿 */
   const pending = ref<Record<string, PendingCommand>>({})
+  /** 结果灯自动熄灭定时器，按动作码存；新命令、切设备或 reset 时取消 */
+  const holdTimers = new Map<number, number>()
+  /** 每个动作码最新的一条命令；旧命令的迟到回执不许改按钮显示 */
+  const latestCmd = new Map<number, string>()
 
   let socket: DeviceSocket | null = null
   /** 连接代次：切设备/重连/换账号都会 +1，异步回来的旧结果一律丢弃 */
@@ -112,6 +120,35 @@ export const usePetStore = defineStore('pet', () => {
     window.clearTimeout(item.expiry)
   }
 
+  function cancelHold(actionCode: number): void {
+    const timer = holdTimers.get(actionCode)
+    if (timer === undefined) return
+    window.clearTimeout(timer)
+    holdTimers.delete(actionCode)
+  }
+
+  /**
+   * 亮一个会自己熄灭的结果灯：
+   * done 绿灯停留 1.5 秒，拒绝/结果不明黄灯停留 5 秒，到点回到 idle。
+   * 只改按钮显示，pending 记录该留的照留，重连后仍按 cmd_id 对账。
+   */
+  function hold(actionCode: number, state: ButtonState, ms: number): void {
+    cancelHold(actionCode)
+    status.value[actionCode] = state
+    holdTimers.set(
+      actionCode,
+      window.setTimeout(() => {
+        holdTimers.delete(actionCode)
+        // 期间又点了别的命令时，状态已经不是这个结果，不能把它清掉
+        if (status.value[actionCode] === state) status.value[actionCode] = 'idle'
+      }, ms),
+    )
+  }
+
+  function isLatest(item: PendingCommand): boolean {
+    return latestCmd.get(item.action) === item.cmd_id
+  }
+
   function armTimeout(item: PendingCommand): void {
     window.clearTimeout(item.timer)
     item.timer = window.setTimeout(() => {
@@ -119,7 +156,8 @@ export const usePetStore = defineStore('pet', () => {
       if (!live) return
       // 超时只表示"没拿到回执"，不能判失败；后端稍后推 done 仍会纠正
       live.timedOut = true
-      status.value[live.action] = 'unknown'
+      if (!isLatest(live)) return
+      hold(live.action, 'unknown', UNFINISHED_HOLD_MS)
       ElMessage.warning('结果不明：长时间没收到设备回执，重连后会再核对')
     }, DISPLAY_TIMEOUT_MS)
   }
@@ -145,7 +183,9 @@ export const usePetStore = defineStore('pet', () => {
     item.expiry = window.setTimeout(() => {
       const live = pending.value[cmdId]
       if (!live) return
-      if (!live.timedOut) status.value[live.action] = 'unknown'
+      if (!live.timedOut && isLatest(live)) {
+        hold(live.action, 'unknown', UNFINISHED_HOLD_MS)
+      }
       dropPending(cmdId)
     }, PENDING_RETIRE_MS)
     pending.value[cmdId] = item
@@ -179,30 +219,37 @@ export const usePetStore = defineStore('pet', () => {
     const item = pending.value[receipt.cmd_id]
     if (!item) return
     if (receipt.seq !== null) item.seq = receipt.seq
+    const latest = isLatest(item)
 
     switch (receipt.status) {
       case 'pending':
-        status.value[item.action] = 'pending'
+        if (latest) {
+          cancelHold(item.action)
+          status.value[item.action] = 'pending'
+        }
         break
       case 'accepted':
-        // 只是受理，仍然黄，不能变绿
-        status.value[item.action] = 'accepted'
+        // 只是受理，仍然黄，不能变绿；继续等 done
+        if (latest) {
+          cancelHold(item.action)
+          status.value[item.action] = 'accepted'
+        }
         armTimeout(item)
         break
       case 'done':
-        status.value[item.action] = 'ok'
+        if (latest) hold(item.action, 'ok', OK_HOLD_MS)
         action.value = receipt.action
         dropPending(receipt.cmd_id)
         break
       case 'rejected':
-        status.value[item.action] = 'fail'
+        if (latest) hold(item.action, 'fail', UNFINISHED_HOLD_MS)
         ElMessage.error(receipt.reason || '设备拒绝了这条动作')
         dropPending(receipt.cmd_id)
         break
       case 'unknown':
       case 'superseded':
       case 'legacy_unmapped':
-        status.value[item.action] = 'unknown'
+        if (latest) hold(item.action, 'unknown', UNFINISHED_HOLD_MS)
         dropPending(receipt.cmd_id)
         break
     }
@@ -213,7 +260,9 @@ export const usePetStore = defineStore('pet', () => {
       (data.cmd_id ? pending.value[data.cmd_id] : undefined) ??
       Object.values(pending.value).find((entry) => entry.seq === data.seq)
     if (!item) return
-    // ack 只表示"设备收到了"，不是执行完成
+    if (!isLatest(item)) return
+    // ack 只表示"设备收到了"，不是执行完成；灯继续黄着等 done
+    cancelHold(item.action)
     status.value[item.action] = 'accepted'
     armTimeout(item)
   }
@@ -250,6 +299,7 @@ export const usePetStore = defineStore('pet', () => {
     if (!uidValue || !currentDeviceId) return
     for (const refItem of getStoredPending(uidValue, currentDeviceId).slice(0, RECONCILE_MAX)) {
       if (pending.value[refItem.cmd_id]) continue
+      latestCmd.set(refItem.action, refItem.cmd_id)
       const item: PendingCommand = {
         cmd_id: refItem.cmd_id,
         action: refItem.action,
@@ -258,10 +308,10 @@ export const usePetStore = defineStore('pet', () => {
         expiry: 0,
         timedOut: true,
       }
-      armTimeout(item)
+      // 已经是"结果不明"，只保留在 pending 里等重连对账，不再走 8 秒超时
       item.expiry = window.setTimeout(() => dropPending(refItem.cmd_id), PENDING_RETIRE_MS)
       pending.value[refItem.cmd_id] = item
-      status.value[refItem.action] = 'unknown'
+      if (isLatest(item)) hold(refItem.action, 'unknown', UNFINISHED_HOLD_MS)
     }
   }
 
@@ -297,8 +347,8 @@ export const usePetStore = defineStore('pet', () => {
           )
           for (const item of Object.values(pending.value)) {
             const current = status.value[item.action]
-            if (current === 'pending' || current === 'accepted') {
-              status.value[item.action] = 'unknown'
+            if ((current === 'pending' || current === 'accepted') && isLatest(item)) {
+              hold(item.action, 'unknown', UNFINISHED_HOLD_MS)
             }
           }
           if (affected) {
@@ -411,13 +461,15 @@ export const usePetStore = defineStore('pet', () => {
     )
   }
 
-  /** 发一个动作：先黄"已提交"，收到 command done 才变绿 */
+  /** 发一个动作：进行中亮黄灯；done 绿灯 1.5 秒后熄灭，未完成黄灯 5 秒后熄灭 */
   async function sendAction(code: number): Promise<void> {
     const gen = generation
     const deviceId = currentDeviceId
     if (!deviceId) return
 
     const cmdId = newCmdId()
+    latestCmd.set(code, cmdId)
+    cancelHold(code)
     addPending(cmdId, code)
     status.value[code] = 'pending'
 
@@ -437,12 +489,15 @@ export const usePetStore = defineStore('pet', () => {
         error instanceof ApiError &&
         [40002, 40101, 40400, 40900].includes(error.code)
       ) {
-        status.value[code] = 'fail'
+        if (isLatest(item)) hold(code, 'fail', UNFINISHED_HOLD_MS)
         dropPending(cmdId)
         return
       }
       item.timedOut = true
-      status.value[code] = 'unknown'
+      // 不再等本地 8 秒超时，直接进入"结果不明"，黄灯 5 秒后熄灭
+      window.clearTimeout(item.timer)
+      item.timer = 0
+      if (isLatest(item)) hold(code, 'unknown', UNFINISHED_HOLD_MS)
       ElMessage.warning('提交结果不明，重连后会向后端核对这条命令')
     }
   }
@@ -489,6 +544,9 @@ export const usePetStore = defineStore('pet', () => {
     musicState.value = 0
     track.value = 0
     volume.value = 15
+    holdTimers.forEach((timer) => window.clearTimeout(timer))
+    holdTimers.clear()
+    latestCmd.clear()
     status.value = {}
     lastPingAt = 0
   }

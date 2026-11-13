@@ -12,10 +12,10 @@ const title = computed(() => {
   const stateText: Record<ButtonState, string> = {
     idle: '点击下发',
     pending: '已提交，等待设备受理',
-    accepted: '设备已受理，等待执行完成',
-    ok: '设备已完成',
-    fail: '设备拒绝或提交失败',
-    unknown: '结果不明，需向后端核对',
+    accepted: '设备已受理，执行中',
+    ok: '设备已完成，1.5 秒后自动熄灭',
+    fail: '动作未完成，5 秒后自动熄灭',
+    unknown: '结果不明，5 秒后自动熄灭',
   }
   return `${props.action.name} · 动作码 ${actionHex(props.action.code)} · ${stateText[props.state]}`
 })
@@ -156,22 +156,16 @@ const title = computed(() => {
   background: var(--ok);
 }
 
-.action-btn.fail {
-  background: #f8ecea;
-  border-color: rgba(165, 58, 51, 0.38);
-}
-
-.action-btn.fail .state-dot {
-  background: var(--danger);
-}
-
+/* 未完成（拒绝/结果不明）统一亮黄灯，5 秒后由 store 自动熄灭 */
+.action-btn.fail,
 .action-btn.unknown {
-  background: #f1efe9;
-  border-color: rgba(20, 20, 20, 0.24);
+  background: #fbf2e3;
+  border-color: rgba(154, 106, 28, 0.42);
 }
 
+.action-btn.fail .state-dot,
 .action-btn.unknown .state-dot {
-  background: rgba(20, 20, 20, 0.45);
+  background: var(--warn);
 }
 
 @keyframes pulse {

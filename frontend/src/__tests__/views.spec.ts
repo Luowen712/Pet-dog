@@ -106,18 +106,27 @@ describe('页面冒烟', () => {
     expect(view.findAll('.face-btn')).toHaveLength(7)
   })
 
-  it('点动作按钮先变黄；没有 done 回执前不会变绿', async () => {
+  it('点动作先黄；完成后绿 1.5 秒，然后自动熄灭', async () => {
     const view = await mountAt('/console')
     const button = view.findAll('.action-btn:not(.disabled)')[0]
     await button.trigger('click')
     await flushPromises()
+    expect(button.classes()).not.toContain('ok')
     expect(['pending', 'accepted']).toContain(
-      button.classes().find((name) => ['pending', 'accepted', 'ok'].includes(name)),
+      button.classes().find((name) => ['pending', 'accepted'].includes(name)),
     )
 
-    await new Promise((resolve) => setTimeout(resolve, 1500))
+    // mock 在 520–1140ms 推 done，此时按钮短暂变绿
+    await new Promise((resolve) => setTimeout(resolve, 1400))
     await flushPromises()
-    expect(button.classes()).not.toContain('ok')
+    expect(button.classes()).toContain('ok')
+
+    // 绿灯只停留 1.5 秒，之后自动回到 idle，不留常亮
+    await new Promise((resolve) => setTimeout(resolve, 1600))
+    await flushPromises()
+    for (const state of ['pending', 'accepted', 'ok', 'fail', 'unknown']) {
+      expect(button.classes()).not.toContain(state)
+    }
   })
 
   it('日志、看板、场景的路由已隐藏，深链回到设备页', async () => {

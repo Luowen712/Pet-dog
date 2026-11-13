@@ -40,11 +40,9 @@ function stateOf(code: number): ButtonState {
         </p>
       </div>
       <div class="legend">
-        <span class="lg"><i class="sw pending" />已提交</span>
-        <span class="lg"><i class="sw accepted" />已受理</span>
-        <span class="lg"><i class="sw ok" />完成</span>
-        <span class="lg"><i class="sw fail" />拒绝</span>
-        <span class="lg"><i class="sw unknown" />结果不明</span>
+        <span class="lg"><i class="sw pending" />进行中</span>
+        <span class="lg"><i class="sw ok" />完成 · 1.5s 后熄灭</span>
+        <span class="lg"><i class="sw fail" />未完成 · 5s 后熄灭</span>
       </div>
     </div>
 
@@ -174,21 +172,13 @@ function stateOf(code: number): ButtonState {
   background: var(--warn);
 }
 
-.sw.accepted {
-  background: var(--warn);
-  opacity: 0.6;
-}
-
 .sw.ok {
   background: var(--ok);
 }
 
 .sw.fail {
-  background: var(--danger);
-}
-
-.sw.unknown {
-  background: rgba(20, 20, 20, 0.42);
+  background: var(--warn);
+  opacity: 0.55;
 }
 
 .no-device-body {
