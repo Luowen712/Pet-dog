@@ -23,13 +23,15 @@ OUT.mkdir(parents=True, exist_ok=True)
 client = TestClient(app)
 
 # 只用于采样：给已存在的 admin(id=1) 现签一个 token，不写库
-ADMIN = {"Authorization": f"Bearer {make_token(1, 'admin')}"}
+ADMIN = {"Authorization": f"Bearer {make_token(1, 'admin', 0)}"}
 
 
 def mask(obj):
     """把 token 打码，其余字段原样保留。"""
     if isinstance(obj, dict):
-        return {k: ("<JWT 已打码>" if k == "token" else mask(v)) for k, v in obj.items()}
+        return {
+            k: ("<JWT 已打码>" if k == "token" else mask(v)) for k, v in obj.items()
+        }
     if isinstance(obj, list):
         return [mask(i) for i in obj]
     return obj
@@ -43,10 +45,20 @@ CASES = [
     ("devices-detail-200", "GET", "/api/devices/1", None, ADMIN),
     ("devices-status-200", "GET", "/api/devices/1/status", None, ADMIN),
     ("devices-list-401", "GET", "/api/devices", None, None),
-    ("login-40001", "POST", "/api/auth/login",
-     {"username": "admin", "password": "__wrong__"}, None),
-    ("register-40002", "POST", "/api/auth/register",
-     {"username": "a", "password": "123"}, None),
+    (
+        "login-40001",
+        "POST",
+        "/api/auth/login",
+        {"username": "admin", "password": "__wrong__"},
+        None,
+    ),
+    (
+        "register-40002",
+        "POST",
+        "/api/auth/register",
+        {"username": "a", "password": "123"},
+        None,
+    ),
 ]
 
 for name, method, url, body, headers in CASES:
@@ -55,12 +67,16 @@ for name, method, url, body, headers in CASES:
     payload = {
         "request": {"method": method, "path": url, "body": body},
         "status_code": resp.status_code,
-        "body": mask(resp.json()) if ctype.startswith("application/json") else resp.text,
+        "body": (
+            mask(resp.json()) if ctype.startswith("application/json") else resp.text
+        ),
     }
     (OUT / f"{name}.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    print(f"{name:22s} HTTP {resp.status_code}  "
-          f"{json.dumps(payload['body'], ensure_ascii=False)[:120]}")
+    print(
+        f"{name:22s} HTTP {resp.status_code}  "
+        f"{json.dumps(payload['body'], ensure_ascii=False)[:120]}"
+    )
 
 print(f"\n已写入 {len(CASES)} 个文件 -> {OUT}")

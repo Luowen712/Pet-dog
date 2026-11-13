@@ -1,14 +1,21 @@
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy.orm import Session
 
+from app.db import get_db
+from app.models import User
 from app.security import parse_token
 
 # auto_error=False：头缺失时不抛 FastAPI 默认的 403，交给我们自己返 40100
 bearer_scheme = HTTPBearer(auto_error=False, scheme_name="Bearer Token")
 
 
-def current_user(cred: HTTPAuthorizationCredentials = Depends(bearer_scheme)):
+def current_user(
+    cred: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+):
     """从 Authorization: Bearer <token> 里取出用户信息，验不过就 401。"""
+
     if cred is None or cred.scheme.lower() != "bearer":
         raise HTTPException(401, detail={"code": 40100, "message": "未登录"})
 
@@ -16,4 +23,7 @@ def current_user(cred: HTTPAuthorizationCredentials = Depends(bearer_scheme)):
     if not data:
         raise HTTPException(401, detail={"code": 40101, "message": "登录已过期"})
 
+    u = db.query(User).filter(User.id == data.get("uid")).first()
+    if u is None or u.token_version != data.get("tv"):
+        raise HTTPException(401, detail={"code": 40101, "message": "登录已过期"})
     return data
