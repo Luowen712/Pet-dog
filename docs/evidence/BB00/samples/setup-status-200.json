@@ -1,0 +1,16 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/setup/status",
+    "body": null
+  },
+  "status_code": 200,
+  "body": {
+    "code": 0,
+    "message": "ok",
+    "data": {
+      "setup_required": false
+    },
+    "timestamp": 1794493192599
+  }
+}

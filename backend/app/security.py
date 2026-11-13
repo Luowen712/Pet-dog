@@ -11,11 +11,12 @@ def hash_pwd(raw: str) -> str:
     return hashlib.sha256(("pet$" + raw).encode("utf-8")).hexdigest()
 
 
-def make_token(user_id: int, username: str) -> str:
+def make_token(user_id: int, username: str, tv: int) -> str:
     """签发 JWT，里面装着用户 id、用户名和过期时间。"""
     payload = {
         "uid": user_id,
         "sub": username,
+        "tv": tv,
         "exp": datetime.now(timezone.utc) + timedelta(hours=settings.JWT_EXPIRE_HOURS),
     }
     return jwt.encode(payload, settings.JWT_SECRET, algorithm="HS256")

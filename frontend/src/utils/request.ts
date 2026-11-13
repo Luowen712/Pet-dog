@@ -30,11 +30,13 @@ async function handleUnauthorized(): Promise<void> {
   redirecting = true
   clearSession()
   try {
-    const [{ default: router }, { useAuthStore }] = await Promise.all([
+    const [{ default: router }, { useAuthStore },{useDeviceStore}] = await Promise.all([
       import('@/router'),
       import('@/stores/auth'),
+      import('@/stores/device'),
     ])
     useAuthStore().reset()
+    useDeviceStore().reset()
     if (router.currentRoute.value.path !== '/login') {
       ElMessage.warning('登录已过期，请重新登录')
       await router.replace({

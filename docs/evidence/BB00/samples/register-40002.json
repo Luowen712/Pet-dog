@@ -1,0 +1,17 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/api/auth/register",
+    "body": {
+      "username": "a",
+      "password": "123"
+    }
+  },
+  "status_code": 200,
+  "body": {
+    "code": 40002,
+    "message": "用户名需 3–20 位字母、数字、下划线或中文",
+    "data": null,
+    "timestamp": 1794493192646
+  }
+}

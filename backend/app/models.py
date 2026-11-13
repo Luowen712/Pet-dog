@@ -1,17 +1,8 @@
 from datetime import datetime
 
-from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean
+from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text
 
 from app.db import Base
-
-
-class User(Base):
-    __tablename__ = "user"
-    id = Column(Integer, primary_key=True)
-    username = Column(String(32), unique=True, nullable=False)
-    password_hash = Column(String(128), nullable=False)
-    role = Column(String(16), default="user")
-    created_at = Column(DateTime, default=datetime.now)
 
 
 class Device(Base):
@@ -68,4 +59,14 @@ class FaceAsset(Base):
     width = Column(Integer, default=128)
     height = Column(Integer, default=32)
     data = Column(Text)
+    created_at = Column(DateTime, default=datetime.now)
+
+
+class User(Base):
+    __tablename__ = "user"
+    id = Column(Integer, primary_key=True)
+    username = Column(String(32), unique=True, nullable=False)
+    password_hash = Column(String(128), nullable=False)
+    role = Column(String(16), default="user")
+    token_version = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime, default=datetime.now)

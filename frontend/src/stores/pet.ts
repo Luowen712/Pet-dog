@@ -562,6 +562,17 @@ export const usePetStore = defineStore('pet', () => {
     resetState()
     disconnectSocket()
     socketStatus.value = 'closed'
+    online.value = false
+    battery.value = 0
+    voltage.value = 0
+
+    action.value = 0
+    face.value = 0
+    musicState.value = 0
+    track.value = 0
+    volume.value = 15
+
+    weather.value = null
     clearStoredPending(uid())
   }
 

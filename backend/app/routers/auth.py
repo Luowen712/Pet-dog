@@ -21,6 +21,7 @@ class LoginIn(BaseModel):
 
 def user_out(u: User) -> dict:
     return {
+        "id": u.id,
         "username": u.username,
         "name": u.username,
         "role": u.role or "user",
@@ -33,7 +34,9 @@ def login(body: LoginIn, db: Session = Depends(get_db)):
     if not u or u.password_hash != hash_pwd(body.password):
         return fail(40001, "用户名或密码错误")
 
-    return ok({"token": make_token(u.id, u.username), "user": user_out(u)})
+    return ok(
+        {"token": make_token(u.id, u.username, u.token_version), "user": user_out(u)}
+    )
 
 
 @router.get("/me")
@@ -69,3 +72,13 @@ def register(body: RegisterIn, db: Session = Depends(get_db)):
         return fail(40900, "用户名已存在")
 
     return ok({"username": username, "name": username})
+
+
+@router.post("/logout")
+def logout(user: dict = Depends(current_user), db: Session = Depends(get_db)):
+    u = db.query(User).filter(User.id == user.get("uid")).first()
+    if not u:
+        raise HTTPException(401, detail={"code": 40101, "message": "登录已过期"})
+    u.token_version += 1
+    db.commit()
+    return ok({"logged_out": True})
