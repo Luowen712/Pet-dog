@@ -85,6 +85,19 @@ def user_state(uid):
         s.close()
 
 
+def db_username(uid):
+    """库里真实的 username（可能已是 ~del~ 占位）。"""
+    from app.db import SessionLocal
+    from app.models import User
+
+    s = SessionLocal()
+    try:
+        u = s.query(User).filter(User.id == uid).first()
+        return u.username if u else None
+    finally:
+        s.close()
+
+
 def give_device(un, uid):
     """把第一台设备划给指定用户，返回设备 id。"""
     from app.db import SessionLocal
@@ -186,11 +199,21 @@ def main():
     check("status 变成 revoking", st == "revoking", "实际 status=%s" % st)
     check("token_version 加了 1", tv == 1, "实际 tv=%s" % tv)
 
+    uname_now = db_username(uid)
+    check("用户名已释放（变成 ~del~ 占位）", str(uname_now).startswith("~del~"),
+          "实际 username=%s" % uname_now)
+
     st_code, b = call("POST", "/api/auth/login", {"username": un, "password": pw})
     check("原密码登不进去", b.get("code") == 40001, "实际 code=%s" % b.get("code"))
 
     st_code, b = call("GET", "/api/auth/me", token=tok)
     check("注销前的旧票失效", st_code == 401, "实际 HTTP %s code=%s" % (st_code, b.get("code")))
+
+    # 必须放在最后：它会真的建出一个同名 active 账号，
+    # 放前面会让上面「原密码登不进去」误登进新账号。
+    _, b = call("POST", "/api/auth/register", {"username": un, "password": "reborn_" + pw})
+    check("原用户名可重新注册", b.get("code") == 0,
+          "实际 code=%s message=%s" % (b.get("code"), b.get("message")))
 
     print("\n--- 还原设备归属 ---")
     restore_devices(before)
@@ -200,8 +223,9 @@ def main():
     print("结果: PASS %d / FAIL %d" % (ok_count, fail_count))
     print("=" * 60)
     if fail_count:
-        print("\n测试账号留在库里了：%s / %s（status 都是 revoking）" % (un, un2))
+        print("\n测试账号留在库里了：%s / %s（revoking，或已被启动清理转成 revoked）" % (un, un2))
         print("清理: DELETE FROM user WHERE username REGEXP '^[ts][0-9]+$';")
+        print("      DELETE FROM user WHERE username LIKE '~del~%';")
     return 0 if fail_count == 0 else 1
 
 
