@@ -24,6 +24,7 @@ def current_user(
         raise HTTPException(401, detail={"code": 40101, "message": "登录已过期"})
 
     u = db.query(User).filter(User.id == data.get("uid")).first()
-    if u is None or u.token_version != data.get("tv"):
+    if u is None or u.token_version != data.get("tv") or u.status != "active":
         raise HTTPException(401, detail={"code": 40101, "message": "登录已过期"})
+
     return data

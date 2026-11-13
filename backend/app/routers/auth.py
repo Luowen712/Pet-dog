@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.deps import current_user
-from app.models import User
+from app.models import Device, User
 from app.resp import fail, ok
 from app.security import hash_pwd, make_token
 
@@ -32,6 +32,8 @@ def user_out(u: User) -> dict:
 def login(body: LoginIn, db: Session = Depends(get_db)):
     u = db.query(User).filter(User.username == body.username).first()
     if not u or u.password_hash != hash_pwd(body.password):
+        return fail(40001, "用户名或密码错误")
+    if u.status != "active":
         return fail(40001, "用户名或密码错误")
 
     return ok(
@@ -112,3 +114,34 @@ def change_password(
     u.token_version += 1
     db.commit()
     return ok({"reauth_required": True})
+
+
+class AccountDeleteIn(BaseModel):
+    password: str
+    confirm_username: str
+
+
+@router.delete("/account")
+def delete_account(
+    body: AccountDeleteIn,
+    user: dict = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    u = db.query(User).filter(User.id == user.get("uid")).first()
+    if not u:
+        raise HTTPException(401, detail={"code": 40101, "message": "登录已过期"})
+
+    if u.password_hash != hash_pwd(body.password):
+        return fail(40001, "密码错误")
+
+    if body.confirm_username.strip() != u.username:
+        return fail(40002, "用户名不匹配")
+
+    db.query(Device).filter(Device.owner_id == u.id).update(
+        {"owner_id": None}, synchronize_session=False
+    )
+    u.status = "revoking"
+    u.token_version += 1
+    db.commit()
+
+    return ok({"status": "revoking"})

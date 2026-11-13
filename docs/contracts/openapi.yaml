@@ -143,7 +143,7 @@ paths:
         请求体放在 DELETE 上，字段见 06:70。立即撤权，返回 revoking，清理最终转 revoked。
         注销同事务内 tv+1 与解绑同时发生，在途连接按关闭码 1004 处理（06:157）。
       operationId: deleteAccount
-      x-impl-status: not-implemented
+      x-impl-status: implemented
       x-business-errors: [40002, 40101, 40900]
       requestBody:
         required: true

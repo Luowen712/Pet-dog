@@ -70,3 +70,4 @@ class User(Base):
     role = Column(String(16), default="user")
     token_version = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime, default=datetime.now)
+    status = Column(String(16), nullable=False, default="active")
