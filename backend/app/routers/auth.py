@@ -82,3 +82,33 @@ def logout(user: dict = Depends(current_user), db: Session = Depends(get_db)):
     u.token_version += 1
     db.commit()
     return ok({"logged_out": True})
+
+
+class ChangePasswordIn(BaseModel):
+    old_password: str
+    new_password: str
+
+
+@router.put("/password")
+def change_password(
+    body: ChangePasswordIn,
+    user: dict = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    u = db.query(User).filter(User.id == user.get("uid")).first()
+    if not u:
+        raise HTTPException(401, detail={"code": 40101, "message": "登录已过期"})
+
+    if u.password_hash != hash_pwd(body.old_password):
+        return fail(40001, "原密码错误")
+
+    if not (10 <= len(body.new_password) <= 128):
+        return fail(40002, "新密码需要 10–128 位")
+
+    if body.new_password == body.old_password:
+        return fail(40002, "新密码不能与原密码相同")
+
+    u.password_hash = hash_pwd(body.new_password)
+    u.token_version += 1
+    db.commit()
+    return ok({"reauth_required": True})
