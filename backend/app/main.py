@@ -5,13 +5,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.staticfiles import StaticFiles
 
-from app import models  # noqa: F401  必须留着，否则一张表都不建
-from app.db import Base, engine
 from app.errors import register_handlers
 from app.resp import ok
 from app.routers import auth, devices, faces, setup
 
-Base.metadata.create_all(bind=engine)
 
 BASE_DIR = Path(__file__).resolve().parent
 

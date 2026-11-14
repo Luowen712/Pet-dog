@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text, text
 
 from app.db import Base
 
@@ -68,6 +68,6 @@ class User(Base):
     username = Column(String(32), unique=True, nullable=False)
     password_hash = Column(String(128), nullable=False)
     role = Column(String(16), default="user")
-    token_version = Column(Integer, nullable=False, default=0)
+    token_version = Column(Integer, nullable=False, default=0, server_default=text("0"))
     created_at = Column(DateTime, default=datetime.now)
-    status = Column(String(16), nullable=False, default="active")
+    status = Column(String(16), nullable=False, default="active", server_default=text("'active'"))
