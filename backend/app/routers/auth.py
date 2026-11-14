@@ -1,4 +1,5 @@
 import re
+import secrets
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -134,12 +135,26 @@ def delete_account(
     if u.password_hash != hash_pwd(body.password):
         return fail(40001, "密码错误")
 
+    # 契约 02:230：最后一个 active admin 禁止注销，否则系统再没有管理员。
+    # 放在密码校验之后，避免未验证身份就能探出「谁是最后一个管理员」。
+    if u.role == "admin":
+        others = (
+            db.query(User)
+            .filter(User.role == "admin", User.status == "active", User.id != u.id)
+            .count()
+        )
+        if others == 0:
+            return fail(40900, "系统必须保留至少一个管理员")
+
     if body.confirm_username.strip() != u.username:
         return fail(40002, "用户名不匹配")
 
     db.query(Device).filter(Device.owner_id == u.id).update(
         {"owner_id": None}, synchronize_session=False
     )
+
+    u.username = "~del~%d~%s" % (u.id, secrets.token_hex(4))
+
     u.status = "revoking"
     u.token_version += 1
     db.commit()
