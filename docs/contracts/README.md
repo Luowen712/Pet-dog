@@ -10,6 +10,7 @@
 - `fixtures/http/` —— HTTP 响应样例（22 个，覆盖成功、业务错误、身份/限流/内部失败、开发期假心跳）；
 - `fixtures/ws/` —— WS 事件样例与关闭码总表（8 个）；
 - `fixtures/frames/` —— 串口帧向量与边界用例（12 个，SUM 可独立重算）；
+- `handover-embedded.md` —— 交给嵌入方的交付包导航：物料清单、要实现的合同点索引、本期范围、回交产物与变更流程，只引用06不复制字节表；
 - 校验脚本是 `backend/tools/check_contracts.py`（归属见 plan/01 的角色权责表；路径以本行为准，不写 `tools/check_contracts.py`）。
 
 运行：

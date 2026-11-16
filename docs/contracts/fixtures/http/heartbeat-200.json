@@ -3,7 +3,7 @@
   "method": "POST",
   "path": "/api/devices/heartbeat",
   "http_status": 200,
-  "rule": "06:280 开发期临时接口，DEV_HEARTBEAT 默认关闭；last_heartbeat 带 +08:00",
+  "rule": "06:334 开发期临时接口，DEV_HEARTBEAT 默认关闭；last_heartbeat 带 +08:00",
   "response": "HeartbeatResponse",
   "body": {
     "code": 0,

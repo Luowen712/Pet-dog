@@ -3,7 +3,7 @@
   "direction": "host->device",
   "cmd": "0x04",
   "name": "心跳请求（每 3 秒）",
-  "rule": "06:219；06:228 官方向量4",
+  "rule": "06:219；06:282 官方向量4",
   "data": [],
   "data_fields": [],
   "hex": "AA 55 00 04 FB",
