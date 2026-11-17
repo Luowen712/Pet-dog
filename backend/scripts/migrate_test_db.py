@@ -252,6 +252,20 @@ def cmd_upgrade(engine, args) -> None:
     show_state(engine)
 
 
+def cmd_downgrade(engine, args) -> None:
+    """回退到指定 revision，会执行该版本的 downgrade()。"""
+    from alembic import command  # noqa: E402
+
+    from alembic.util.exc import CommandError  # noqa: E402
+
+    try:
+        command.downgrade(get_alembic_config(), args.to)
+    except CommandError as exc:
+        raise SystemExit(f"[失败] {exc}") from exc
+    log(f"[完成] 已 downgrade 到 {args.to}")
+    show_state(engine)
+
+
 def cmd_stamp(engine, args) -> None:
     """老库路径：按 models.py 建表，再假装它已经走过指定版本的迁移。"""
     from alembic import command  # noqa: E402
@@ -336,6 +350,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_up = sub.add_parser("upgrade", help="在现有库上 upgrade（不清空）")
     p_up.add_argument("--to", default="head", help="目标 revision，默认 head")
 
+    p_down = sub.add_parser("downgrade", help="在现有库上回退到指定 revision（不清空）")
+    p_down.add_argument("--to", required=True, help="目标 revision，如 0004")
+
     p_stamp = sub.add_parser("stamp", help="按 models 建表后 stamp（模拟老库）")
     p_stamp.add_argument("--to", default="0001", help="stamp 到的 revision，默认 0001")
 
@@ -361,6 +378,7 @@ HANDLERS = {
     "tables": cmd_tables,
     "reset": cmd_reset,
     "upgrade": cmd_upgrade,
+    "downgrade": cmd_downgrade,
     "stamp": cmd_stamp,
     "revision": cmd_revision,
 }
