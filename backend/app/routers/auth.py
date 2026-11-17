@@ -149,8 +149,19 @@ def delete_account(
     if body.confirm_username.strip() != u.username:
         return fail(40002, "用户名不匹配")
 
+    # 解绑必须四列一起改。ck_device_owner_status 要求「无主必非 bound」，
+    # 只清 owner_id 会立刻违反 CHECK 报 3819，整个注销事务回滚、账号删不掉。
+    # 重置成 claimable/required 与 0003 回填的口径一致：无主设备回到可被认领状态。
+    # be（绑定纪元）不在这里 +1 —— 它属于「下一次绑定」的语义，
+    # 下次被认领时 +1 才能让旧主人的旧命令失效。
     db.query(Device).filter(Device.owner_id == u.id).update(
-        {"owner_id": None}, synchronize_session=False
+        {
+            "owner_id": None,
+            "status": "claimable",
+            "handover_state": "required",
+            "bound_at": None,
+        },
+        synchronize_session=False,
     )
 
     u.username = "~del~%d~%s" % (u.id, secrets.token_hex(4))

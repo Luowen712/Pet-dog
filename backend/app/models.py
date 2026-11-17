@@ -2,6 +2,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
     ForeignKey,
@@ -24,7 +25,11 @@ class Device(Base):
     capability = Column(Integer, default=31)
     online = Column(Boolean, default=False)
     last_seen = Column(DateTime, nullable=True)
-    owner_id = Column(Integer)
+    # 归属：可空（未绑定设备），删除用户时 RESTRICT —— 设备是硬件资产，
+    # 删账号不等于设备消失，必须先显式解绑
+    owner_id = Column(
+        Integer, ForeignKey("user.id", ondelete="RESTRICT"), nullable=True
+    )
     be = Column(Integer, nullable=False, default=0, server_default=text("0"))  # ②
     status = Column(
         String(16),
@@ -40,11 +45,29 @@ class Device(Base):
     )  # ④
     bound_at = Column(DateTime, nullable=True)
 
+    __table_args__ = (
+        # 一个账号至多一台设备。MySQL 的 UNIQUE 允许多个 NULL，
+        # 所以未绑定设备（owner_id=NULL）不受这条限制。
+        UniqueConstraint("owner_id", name="uq_device_owner"),
+        # I1：有主必 bound，无主必非 bound。
+        # 和 0007 验数、0008 的 DDL 必须是同一句话，三处改一处就等于没改。
+        CheckConstraint(
+            "(owner_id IS NULL AND status <> 'bound') "
+            "OR (owner_id IS NOT NULL AND status = 'bound')",
+            name="ck_device_owner_status",
+        ),
+    )
+
 
 class CommandLog(Base):
     __tablename__ = "command_log"
     id = Column(Integer, primary_key=True)
     device_id = Column(String(32), index=True)
+    # device_pk 指向 device.id。0004 加列时先留可空，0007 验数确认零 NULL 后
+    # 0008 才收紧成 NOT NULL + 外键（expand → backfill → verify → contract）
+    device_pk = Column(
+        Integer, ForeignKey("device.id", ondelete="RESTRICT"), nullable=False
+    )
     msg_id = Column(String(36), index=True)
     cmd = Column(Integer)
     action = Column(Integer, nullable=True)
@@ -52,6 +75,18 @@ class CommandLog(Base):
     status = Column(Integer, default=1)
     seq = Column(Integer, nullable=True)
     source = Column(String(16), default="api")
+    # 设备自发的命令没有操作人，所以可空
+    actor_user_id = Column(
+        Integer, ForeignKey("user.id", ondelete="RESTRICT"), nullable=True
+    )
+    # 发起时的绑定纪元 / 用户 token 版本 / 状态版本，用于事后判定这条命令是否还有效
+    be = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    tv = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    revision = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    # null=尚未尝试，0=全写，1=确定未写，2=可能部分写
+    transport = Column(Integer, nullable=True)
+    reason = Column(String(128), nullable=True)
+    session_id = Column(String(36), nullable=True)
     created_at = Column(DateTime, default=datetime.now)
     finished_at = Column(DateTime, nullable=True)
 
@@ -60,10 +95,17 @@ class Telemetry(Base):
     __tablename__ = "telemetry"
     id = Column(Integer, primary_key=True)
     device_id = Column(String(32), index=True)
+    # 同 CommandLog：0004 加列时留可空，0007 验数后 0008 收紧
+    device_pk = Column(
+        Integer, ForeignKey("device.id", ondelete="RESTRICT"), nullable=False
+    )
     battery = Column(Integer, nullable=True)
     music_state = Column(Integer, nullable=True)
     action = Column(Integer, nullable=True)
     raw = Column(String(256), nullable=True)
+    # 这条遥测属于哪一代绑定 / 哪一次连接，防止旧快照污染新主人
+    be = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    session_id = Column(String(36), nullable=True)
     created_at = Column(DateTime, default=datetime.now, index=True)
 
 
@@ -97,6 +139,8 @@ class User(Base):
     status = Column(
         String(16), nullable=False, default="active", server_default=text("'active'")
     )
+    # 软删除时间。账号状态仍以 status(active/revoking/revoked) 为准，这里只记时间做审计
+    deleted_at = Column(DateTime, nullable=True)
 
 
 # 设备是否有主人,是否被认领
@@ -115,6 +159,11 @@ class DeviceClaim(Base):
         Integer, ForeignKey("user.id", ondelete="RESTRICT"), nullable=True
     )
     created_at = Column(DateTime, default=datetime.now)
+
+    __table_args__ = (
+        # 一台设备至多一条配对码记录：重新生成配对码走 UPDATE，不是再插一行
+        UniqueConstraint("device_pk", name="uq_device_claim_device"),
+    )
 
 
 class AuditLog(Base):

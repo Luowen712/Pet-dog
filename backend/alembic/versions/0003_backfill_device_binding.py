@@ -4,11 +4,14 @@ Revision ID: 0003
 Revises: 0002
 Create Date: 2026-11-16
 
+文档映射：06 §310 的「0003 回填归档」→ 本文件（三步之一：设备状态回填）。
+另两步是 0005（device_pk 回填）和 0006（孤儿归档）。
+
 0002 给 device 加了 be / status / handover_state / bound_at，非空列必须有
 DDL 默认值才能加到有数据的表上，所以存量行当时拿到的是占位值：
 status='claimable'、handover_state='required'、be=0、bound_at=NULL。
 
-但"有主却标着可认领"是矛盾状态，0005 的 CHECK 会直接拒绝：
+但"有主却标着可认领"是矛盾状态，0008 的 CHECK 会直接拒绝：
     (owner_id IS NULL     AND status <> 'bound')
  OR (owner_id IS NOT NULL AND status  = 'bound')
 
@@ -18,7 +21,7 @@ status='claimable'、handover_state='required'、be=0、bound_at=NULL。
 - status='retired' 的行一律跳过：退役设备不能被重新拉回可认领
 
 归属真伪（owner 指向的 user 是否存在）不在本版判断 —— 按 06 §10，
-那是 0004 验数的工作，验不过就中止迁移并人工清点，不在这里猜。
+那是 0007 验数的工作，验不过就中止迁移并人工清点，不在这里猜。
 
 可重入：所有条件都带"当前值不符合预期"的前置判断，重复执行不改动已正确的行，
 也不会把 bound_at 刷成新的时间戳。
