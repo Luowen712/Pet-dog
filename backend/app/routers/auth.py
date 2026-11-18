@@ -1,11 +1,12 @@
 import re
 import secrets
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app import ratelimit as rl
 from app.db import get_db
 from app.deps import current_user
 from app.models import Device, User
@@ -30,11 +31,27 @@ def user_out(u: User) -> dict:
 
 
 @router.post("/login")
-def login(body: LoginIn, db: Session = Depends(get_db)):
+def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
+    # 两套键同时判：账号 5 次/15 分钟防定向爆破，IP 30 次/15 分钟防撞库。
+    # 账号键统一小写，避免用 Admin/ADMIN 分流绕过（库里 username 比较本身不区分大小写）。
+    acct_key = "login:acct:" + body.username.strip().lower()
+    ip_key = "login:ip:" + rl.client_ip(request)
+
+    wait = rl.check(acct_key, rl.LOGIN_ACCT_LIMIT, rl.LOGIN_ACCT_WINDOW)
+    if not wait:
+        wait = rl.check(ip_key, rl.LOGIN_IP_LIMIT, rl.LOGIN_IP_WINDOW)
+    if wait:
+        raise rl.too_many(wait)
+
     u = db.query(User).filter(User.username == body.username).first()
     if not u or not verify_pwd(u.password_hash, body.password):
+        rl.record(acct_key, rl.LOGIN_ACCT_WINDOW)
+        rl.record(ip_key, rl.LOGIN_IP_WINDOW)
         return fail(40001, "用户名或密码错误")
     if u.status != "active":
+        # 账号不可用同样算失败：不记账的话可以无限探测某个账号是否被封。
+        rl.record(acct_key, rl.LOGIN_ACCT_WINDOW)
+        rl.record(ip_key, rl.LOGIN_IP_WINDOW)
         return fail(40001, "用户名或密码错误")
 
     # 旧摘要升级：验证通过且账号可用时，才把存量 SHA-256 换成 Argon2id。
@@ -65,13 +82,24 @@ USERNAME_RE = re.compile(r"[a-zA-Z0-9_\u4e00-\u9fa5]{3,20}")
 
 
 @router.post("/register")
-def register(body: RegisterIn, db: Session = Depends(get_db)):
+def register(body: RegisterIn, request: Request, db: Session = Depends(get_db)):
+    ip_key = "register:ip:" + rl.client_ip(request)
+    wait = rl.check(ip_key, rl.REGISTER_IP_LIMIT, rl.REGISTER_IP_WINDOW)
+    if wait:
+        raise rl.too_many(wait)
+
     username = body.username.strip()
     if not USERNAME_RE.fullmatch(username):
         return fail(40002, "用户名需 3–20 位字母、数字、下划线或中文")
     # 与改密码保持同一口径（10–128），此前注册只要求 6 位，两套标准。
     if not (10 <= len(body.password) <= 128):
         return fail(40002, "密码需要 10–128 位")
+
+    # 注册按「请求次数」计，成功也占额度。
+    # 契约第 34 行写「计数只累计失败与拒绝」，但注册若只计失败，
+    # 攻击者换个用户名就能无限建号——限流本意是防批量注册，这里按请求数记。
+    # 放在参数校验之后：格式不对的请求不该消耗正常用户的额度。
+    rl.record(ip_key, rl.REGISTER_IP_WINDOW)
 
     u = User(username=username, password_hash=hash_pwd(body.password))
     db.add(u)

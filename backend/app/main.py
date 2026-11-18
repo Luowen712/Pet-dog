@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.db import SessionLocal
 from app.errors import register_handlers
+from app.ratelimit import assert_single_process
 from app.resp import ok
 from app.routers import auth, devices, faces, setup
 from app.services.purge import purge_revoking
@@ -37,6 +38,10 @@ async def lifespan(app: FastAPI):
         print("[启动清理] 已跳过（数据库不可用？）：%s" % e)
     yield
 
+
+# 限流是单进程内存计数器（06§2）：多 worker 时每个进程各算一份，实际阈值
+# 被放大成 N 倍，等于限流失效。契约要求此时拒绝启动，而不是悄悄降级。
+assert_single_process()
 
 # docs_url=None：关掉 FastAPI 内置的 /docs（它从国外 CDN 取资源，国内打不开）
 app = FastAPI(
