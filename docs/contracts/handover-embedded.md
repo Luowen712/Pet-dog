@@ -43,6 +43,12 @@
 | 去重与看门狗 | 06:284-286 | 同 seq 同 payload 只重发结果、异 payload 拒绝；断链超时停步保持姿态，不发虚假完成 |
 | 会话语义 | 06:288-291 | 序号同会话不复用；上电清去重表，主机必须重建会话 |
 | 时序预算 | 06:206 | ACK 预算与完成超时的起算点、未测动作的临时上限按 06 |
+| 有效上行与离线判定 | 06 第12.1节 | 主机 9 秒无有效上行即 offline；有效=方向为设备→主机、SUM 正确、长度自洽的完整帧，坏 SUM/坏长度/噪声字节不算 |
+| 看门狗触发后的主机侧处置 | 06 第12.3节 | 该会话未终结命令置 unknown + reason=uplink_timeout，不自动重发；恢复后新建 session_id |
+| 06 催状态与 5 秒周期 | 06 第12.2节 | 收到 06 立即发一帧 03，并把 5 秒自主上报周期从本次发送时刻重新起算 |
+| 07 表情越界 | 06 第12.4节 | face 不在 0..6 时丢弃、不改当前表情、不回包 |
+| 同 seq 异 payload 的拒绝码 | 06 第12.5节 | 固定回 05 且 error_code=02 |
+| 03 非 9 字节布局 | 06 第12.6节 | LEN=6 时电压及之后一律 null；其它长度只当有效上行刷新，不按 9 字节解析 |
 
 ## 3. 本期范围：7 动作 + 7 表情
 
@@ -78,7 +84,9 @@
 | `Health.protocol_version` | 后端 `/api/health` 未返回，openapi 已标 `x-impl-gap`（openapi.yaml:492） | 后端开发期补，不影响固件先做解析 |
 | `firmware/`、`hardware/` | 仍是空占位，EA00 未完成 | 阻塞点，先收齐可编译 Keil 工程 |
 | 动作码口径 | 仓库曾并存 21/19/7 三套数字 | 已收敛：21 码只在 06:240-266；`frontend/src/constants/actions.ts` 的 19 项是前端旧按钮列表，不是协议依据 |
+| 06 第12节是新增条款 | 由后端契约复核补入，尚未与嵌入A/嵌入B 逐条对齐；其中 12.2 的周期重置与 12.4 的越界丢弃属固件侧行为 | 嵌入方逐条书面确认；确认不了的回到 06 改，不接受只在固件里另做一套 |
+| 06 全篇按裸行号被引用 | openapi、本文、fixtures 的 rule 字段共 113 处（分布在 88 行）写 `06:NNN`，`check_contracts.py` 不校验行号 | 新增条款一律追加到 06 末尾的新节（第12节起），不改动前文行数；引用改用“06 第12.x节” |
 
 ## 7. 变更流程
 
-任何帧、枚举、字段、时序的改动：先改 06 → 再同步 `openapi.yaml` 与 `fixtures/` → 运行 `backend/tools/check_contracts.py`（在 backend 目录执行 `.\.venv\Scripts\python.exe tools\check_contracts.py`，或仓库根执行 `backend\.venv\Scripts\python.exe backend\tools\check_contracts.py`）→ 通知嵌入A/嵌入B/前端。不带 06 依据的实现改动不接受。
+任何帧、枚举、字段、时序的改动：先改 06（只在文件末尾追加新节，不插入已有章节中间，避免 `06:行号` 引用整体偏移）→ 再同步 `openapi.yaml` 与 `fixtures/` → 运行 `backend/tools/check_contracts.py`（在 backend 目录执行 `.\.venv\Scripts\python.exe tools\check_contracts.py`，或仓库根执行 `backend\.venv\Scripts\python.exe backend\tools\check_contracts.py`）→ 通知嵌入A/嵌入B/前端。不带 06 依据的实现改动不接受。
