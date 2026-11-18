@@ -12,6 +12,8 @@ import time
 from dataclasses import dataclass
 from typing import Protocol
 
+from serial import SerialException
+
 from app.link.frame import Frame, Parser, build
 
 # docs/contracts/fixtures/frames.status.core9.json 的同值：87%、空闲、表情 2、7422mV、20°C
@@ -20,6 +22,7 @@ ENABLED_ACTIONS = frozenset(range(0x30, 0x37))  # 06:240 本期只启用 0x30~0x
 
 ERR_UNSUPPORTED = 0x01
 ERR_PARAM = 0x02
+ERR_OVERLONG = 0x03
 ERR_BUSY = 0x04
 
 CMD_ACTION = 0x01
@@ -80,6 +83,7 @@ class SimStats:
     rejected_param: int = 0
     unknown_cmd: int = 0
     malformed: int = 0
+    rejected_overlong: int = 0
 
 
 def _opt(value: int) -> int | None:
@@ -154,12 +158,10 @@ class SimulatedDevice:
             self._handle(frame, now)
 
     def poll(self) -> list[bytes]:
-        """返回 due_at <= 当前时钟 的出站帧，按入队顺序；无到期帧返回 []。"""
         now = self._clock.monotonic()
-        due = [payload for due_at, payload in self._out if due_at <= now]
-        if due:
-            self._out = [(at, payload) for at, payload in self._out if at > now]
-        return due
+        ready = sorted((item for item in self._out if item[0] <= now), key=lambda it: it[0])
+        self._out = [item for item in self._out if item[0] > now]
+        return [payload for _, payload in ready]
 
     # --- 内部 ---
 
@@ -196,8 +198,12 @@ class SimulatedDevice:
         if len(data) < 4:
             self.stats.malformed += 1  # 取不到 seq，按 06:281 不回 05
             return
-
         action, seq = data[0], data[3]
+        if len(data) > 4:
+            self.stats.rejected_overlong += 1
+            self._emit(now, build(CMD_REJECT, bytes([ERR_OVERLONG, seq])))
+            return
+
         sig = bytes(data)
         known = self._seq_results.get(seq)
         if known is not None:
@@ -236,39 +242,73 @@ class SimulatedDevice:
             self._emit(now + offset, payload)
 
 
-class SimDisconnected(RuntimeError):
-    pass
+class SimDisconnected(SerialException):
+    """模拟端口的所有 I/O 失败都用它。
+
+    继承 serial.SerialException 是为了让上层只写一个 except：
+    真串口抛 PortNotOpenError（也是 SerialException 的子类），
+    模拟端口抛 SimDisconnected，两者同宗，链路层不必区分真假端口。
+    """
 
 
 class SimBytePort:
-    """把 SimulatedDevice 包成 pyserial 同形的最小面：write / read / close。"""
+    """把 SimulatedDevice 包成与 pyserial.Serial 同形的端口。
+
+    对真端口实测（pyserial 3.5 + loop://）后确定的语义：
+    端口关闭后除 is_open 外，每个操作都抛异常，绝不静默返回空；
+    打开且无数据时 read 立即返回 b""（timeout=0 的不阻塞语义）。
+    """
 
     def __init__(self, device: SimulatedDevice) -> None:
         self._device = device
         self._rx = bytearray()
         self._closed = False
 
+    @property
+    def is_open(self) -> bool:
+        return not self._closed
+
+    @property
+    def in_waiting(self) -> int:
+        self._check_open()
+        self._drain()
+        return len(self._rx)
+
     def write(self, data: bytes) -> int:
-        if self._closed:
-            raise SimDisconnected("端口已关闭")
-        if not self._device.connected:
-            raise SimDisconnected("模拟设备已断开")
+        self._check_open()
         self._device.feed(bytes(data))
         return len(data)
 
-    def read(self, size: int = 1, timeout: float | None = 0.0) -> bytes:
-        """从不阻塞：timeout 只为与 pyserial 同形，不参与等待。"""
-        if self._closed or not self._device.connected or size <= 0:
+    def read(self, size: int = 1) -> bytes:
+        self._check_open()  # 真 pyserial 先判 is_open 再处理 size，关闭态 read(0) 也抛
+        if size <= 0:
             return b""
-        while len(self._rx) < size:
-            frames = self._device.poll()
-            if not frames:
-                break
-            for frame in frames:
-                self._rx += frame
+        if len(self._rx) < size:
+            self._drain()
         chunk = bytes(self._rx[:size])
         del self._rx[:size]
         return chunk
 
+    def flush(self) -> None:
+        self._check_open()
+
+    def reset_input_buffer(self) -> None:
+        self._check_open()
+        self._rx.clear()
+
     def close(self) -> None:
         self._closed = True
+
+    def _check_open(self) -> None:
+        if self._closed:
+            raise SimDisconnected("端口已关闭")
+        if not self._device.connected:
+            raise SimDisconnected("模拟设备已断开")
+
+    def _drain(self) -> None:
+        while True:
+            frames = self._device.poll()
+            if not frames:
+                return
+            for frame in frames:
+                self._rx += frame

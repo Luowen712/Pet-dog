@@ -180,7 +180,12 @@ def test_disconnect_blocks_write():
     port = SimBytePort(dev)
     with pytest.raises(SimDisconnected):
         port.write(HEARTBEAT_REQ)
-    assert port.read(5) == b""
+    with pytest.raises(SimDisconnected):
+        port.read(5)
+    with pytest.raises(SimDisconnected):
+        _ = port.in_waiting
+
+    assert port.is_open is True
 
 
 def test_port_assembles_frame_byte_by_byte():
@@ -288,3 +293,28 @@ def test_decode_status_rejects_other_lengths():
 def test_module_never_sleeps():
     src = pathlib.Path(fr.__file__).with_name("simulator.py").read_text(encoding="utf-8")
     assert "sleep" not in src
+
+def test_closed_port_raises_like_pyserial():
+    dev, _ = sim()
+    port = SimBytePort(dev)
+    port.close()
+    assert port.is_open is False
+    with pytest.raises(SimDisconnected):
+        port.read(1)
+    with pytest.raises(SimDisconnected):
+        port.write(HEARTBEAT_REQ)
+    with pytest.raises(SimDisconnected):
+        port.flush()
+    with pytest.raises(SimDisconnected):
+        port.reset_input_buffer()
+    with pytest.raises(SimDisconnected):
+        _ = port.in_waiting
+    port.close()  # 重复 close 不报错，与真端口一致
+
+
+def test_overlong_action_is_rejected_with_03():
+    dev, _ = sim()
+    dev.feed(build(0X01, bytes([0x31, 0x00, 0x01, 0x07, 0x09])))
+    assert dev.poll() == [bytes.fromhex("AA 55 02 05 03 07 EE")]
+    assert dev.stats.rejected_overlong == 1
+    assert dev.stats.rejected_busy == 0
