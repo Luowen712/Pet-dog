@@ -40,8 +40,12 @@ Create Date: 2026-11-17
 人话：没主人的设备不能是 bound，有主人的设备必须是 bound。
 外面套一层 NOT(...) 数出来的就是"自己不满足自己"的行。
 
-第 7 项是归档防篡改的实际落地方式：sha256 出来必然是 64 位小写十六进制，
+第 11 项是归档防篡改的实际落地方式：sha256 出来必然是 64 位小写十六进制，
 格式不对说明归档被改过，或者当初算 hash 的算法写错了。
+这一项必须带 COLLATE utf8mb4_bin —— 连接 collation 是 utf8mb4_0900_ai_ci
+（大小写不敏感）时，字符类 [0-9a-f] 会把 A-F 一起匹配进去，大写 hash
+也能蒙混过关。实测 'AAAA…'（64 个大写 A）在 _ai_ci 下匹配该正则返回 1，
+加 COLLATE 后返回 0。
 """
 
 from typing import Sequence, Union
@@ -155,7 +159,7 @@ CHECKS: list[tuple[str, str, str]] = [
         SELECT COUNT(*) FROM legacy_row_archive
          WHERE row_hash IS NULL
             OR CHAR_LENGTH(row_hash) <> 64
-            OR row_hash NOT REGEXP '^[0-9a-f]{64}$'
+            OR row_hash COLLATE utf8mb4_bin NOT REGEXP '^[0-9a-f]{64}$'
             OR payload IS NULL
             OR payload = ''
         """,

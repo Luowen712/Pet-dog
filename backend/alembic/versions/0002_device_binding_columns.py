@@ -23,6 +23,8 @@ Create Date: 2026-11-16
 
 """
 
+from typing import Sequence, Union
+
 import sqlalchemy as sa
 
 from alembic import op
@@ -75,7 +77,6 @@ def upgrade() -> None:
     # 只存 code_hash 不存明文：库被拖走也拿不到能直接用的配对码。
     op.create_table(
         "device_claim",
-        # 自增主键
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("device_pk", sa.Integer(), nullable=False),
         # 6 位配对码的 sha256（64 位十六进制）
@@ -95,7 +96,6 @@ def upgrade() -> None:
         sa.Column("consumed_at", sa.DateTime(), nullable=True),
         # user.id —— 被谁用掉。可空，仅在 consumed_at 非空时有意义。
         sa.Column("consumed_by_user_id", sa.Integer(), nullable=True),
-        # 生成时刻
         sa.Column("created_at", sa.DateTime(), nullable=True),
         # 设备被删时不连带删码，必须先显式清理（硬件资产不许被静默带走证据）
         sa.ForeignKeyConstraint(["device_pk"], ["device.id"], ondelete="RESTRICT"),
@@ -109,7 +109,6 @@ def upgrade() -> None:
     # ==================== audit：审计流水 ====================
     op.create_table(
         "audit",
-        # 自增主键
         sa.Column("id", sa.Integer(), nullable=False),
         # 操作人。可空 —— 设备自发或系统定时任务没有"人"这个主体。
         sa.Column("actor_user_id", sa.Integer(), nullable=True),
@@ -136,7 +135,6 @@ def upgrade() -> None:
     # 归属无法证明的历史行，先整行搬到这里，再从活跃表删掉。
     op.create_table(
         "legacy_row_archive",
-        # 自增主键
         sa.Column("id", sa.Integer(), nullable=False),
         # 原始表名（command_log / telemetry），说明这行从哪搬来的
         sa.Column("source_table", sa.String(length=32), nullable=False),
@@ -169,7 +167,6 @@ def upgrade() -> None:
     # "这条上报属于哪一次连接、哪一代绑定"，防止重启前的老快照污染新主人。
     op.create_table(
         "device_session_record",
-        # 自增主键
         sa.Column("id", sa.Integer(), nullable=False),
         # 哪台设备。新表为空，可以直接建非空外键。
         sa.Column("device_pk", sa.Integer(), nullable=False),

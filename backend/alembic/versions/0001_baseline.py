@@ -14,6 +14,8 @@ Create Date: 2026-11-13 21:55
   telemetry    缺 device_pk / be / session_id                          → 0004
 """
 
+from typing import Sequence, Union
+
 import sqlalchemy as sa
 
 from alembic import op

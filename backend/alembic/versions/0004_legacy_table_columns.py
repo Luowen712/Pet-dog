@@ -19,7 +19,8 @@ Create Date: 2026-11-17
 
 1. 存量 command_log / telemetry 的 device_id 可能指向已删除的设备（孤儿行）。
    此刻建 FK 会直接失败，所以 device_pk 先以可空列落地：
-   回填在 0005，验数在 0006，FK 与 NOT NULL 留到验过零孤儿之后的 contract 阶段。
+   回填在 0005，孤儿行归档在 0006，验数在 0007，
+   FK 与 NOT NULL 留到验过零孤儿之后的 0008（contract 阶段）。
 
 2. MySQL 的 ALTER TABLE 会隐式提交，Alembic 的 transaction 包不住 DDL。
    把"加列"和"回填"塞进同一个 revision，一旦回填中途失败，列已经落库而版本号

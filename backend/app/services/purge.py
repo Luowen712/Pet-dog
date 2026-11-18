@@ -5,7 +5,7 @@
 
 from sqlalchemy.orm import Session
 
-from app.models import Scene, User
+from app.models import FaceAsset, Scene, User
 
 
 def purge_revoking(db: Session) -> dict:
@@ -15,15 +15,21 @@ def purge_revoking(db: Session) -> dict:
     failed = []
     for u in rows:
         try:
+            # 先删子行、再改父行状态：外键是 RESTRICT，顺序不能反
+            # （反了会报 1451，整个事务回滚，账号永远注销不掉）。
             n_scene = (
                 db.query(Scene)
                 .filter(Scene.owner_id == u.id)
                 .delete(synchronize_session=False)
             )
-            # TODO: face_asset 表没有 owner_id，自定义表情暂时无法按用户清理
+            n_face = (
+                db.query(FaceAsset)
+                .filter(FaceAsset.owner_id == u.id)
+                .delete(synchronize_session=False)
+            )
             u.status = "revoked"
             db.commit()
-            purged.append({"id": u.id, "scenes": n_scene})
+            purged.append({"id": u.id, "scenes": n_scene, "faces": n_face})
         except Exception as e:
             db.rollback()
             failed.append({"id": u.id, "error": str(e)})
