@@ -10,7 +10,7 @@ from app.db import get_db
 from app.deps import current_user
 from app.models import Device, User
 from app.resp import fail, ok
-from app.security import hash_pwd, make_token
+from app.security import hash_pwd, make_token, needs_rehash, verify_pwd
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
 
@@ -32,10 +32,16 @@ def user_out(u: User) -> dict:
 @router.post("/login")
 def login(body: LoginIn, db: Session = Depends(get_db)):
     u = db.query(User).filter(User.username == body.username).first()
-    if not u or u.password_hash != hash_pwd(body.password):
+    if not u or not verify_pwd(u.password_hash, body.password):
         return fail(40001, "用户名或密码错误")
     if u.status != "active":
         return fail(40001, "用户名或密码错误")
+
+    # 旧摘要升级：验证通过且账号可用时，才把存量 SHA-256 换成 Argon2id。
+    # 顺序不能提前——验证没过就写哈希，等于把错误密码当成新密码存进去。
+    if needs_rehash(u.password_hash):
+        u.password_hash = hash_pwd(body.password)
+        db.commit()
 
     return ok(
         {"token": make_token(u.id, u.username, u.token_version), "user": user_out(u)}
@@ -63,8 +69,9 @@ def register(body: RegisterIn, db: Session = Depends(get_db)):
     username = body.username.strip()
     if not USERNAME_RE.fullmatch(username):
         return fail(40002, "用户名需 3–20 位字母、数字、下划线或中文")
-    if len(body.password) < 6:
-        return fail(40002, "密码至少 6 位")
+    # 与改密码保持同一口径（10–128），此前注册只要求 6 位，两套标准。
+    if not (10 <= len(body.password) <= 128):
+        return fail(40002, "密码需要 10–128 位")
 
     u = User(username=username, password_hash=hash_pwd(body.password))
     db.add(u)
@@ -102,7 +109,7 @@ def change_password(
     if not u:
         raise HTTPException(401, detail={"code": 40101, "message": "登录已过期"})
 
-    if u.password_hash != hash_pwd(body.old_password):
+    if not verify_pwd(u.password_hash, body.old_password):
         return fail(40001, "原密码错误")
 
     if not (10 <= len(body.new_password) <= 128):
@@ -132,7 +139,7 @@ def delete_account(
     if not u:
         raise HTTPException(401, detail={"code": 40101, "message": "登录已过期"})
 
-    if u.password_hash != hash_pwd(body.password):
+    if not verify_pwd(u.password_hash, body.password):
         return fail(40001, "密码错误")
 
     # 契约 02:230：最后一个 active admin 禁止注销，否则系统再没有管理员。
