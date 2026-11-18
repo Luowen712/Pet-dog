@@ -114,7 +114,12 @@ class Scene(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String(64))
     steps = Column(Text)
-    owner_id = Column(Integer, default=1)
+    # 归属：可空外键（0009）。NULL = 无主（系统预置场景），不是错误归属。
+    # 原来这里是裸 Integer + default=1：新建场景不传主人就自动归给 id=1 的账号，
+    # 而迁移后 id=1 是被禁用的旧账号。默认值也是一种隐式授权，不能留。
+    owner_id = Column(
+        Integer, ForeignKey("user.id", ondelete="RESTRICT"), nullable=True
+    )
     created_at = Column(DateTime, default=datetime.now)
 
 
@@ -125,6 +130,11 @@ class FaceAsset(Base):
     width = Column(Integer, default=128)
     height = Column(Integer, default=32)
     data = Column(Text)
+    # 0009 新增：没有这一列时，注销账号无法按用户清理自定义表情
+    # （purge.py 里那条 TODO 说的就是这件事）。
+    owner_id = Column(
+        Integer, ForeignKey("user.id", ondelete="RESTRICT"), nullable=True
+    )
     created_at = Column(DateTime, default=datetime.now)
 
 
