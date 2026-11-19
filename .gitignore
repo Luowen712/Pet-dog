@@ -23,6 +23,11 @@ dist-ssr/
 .env
 .env.local
 .env.*.local
+# .env 的手工备份里装着真实的 JWT_SECRET / CLAIM_SECRET，
+# 上面那条 .env 是精确匹配，盖不住 .env.bak-20261119_2008 这类命名。
+.env.bak*
+.env.*.bak
+!.env.example
 
 # Keil / 嵌入式编译产物
 firmware/**/Objects/
