@@ -132,7 +132,19 @@ def rename_device(
     return ok(device_out(d, battery_of(latest_telemetry(db, d))))
 
 
-_music_state: dict[str, dict] = {}
+_music_state: dict[tuple[int, int], dict] = {}
+
+
+def _music_key(d: Device) -> tuple[int, int]:
+    """音乐状态按 (device_pk, be) 隔离，和遥测用同一套判据。
+
+    用 device_id 当 key 会漏：它是设备自报的字符串，跨绑定纪元不变。
+    设备换主人（be+1）后，新主人查状态会读到上一任的曲目号和音量——
+    和 latest_telemetry 缺 be 条件那处是同一类泄漏（台账 S01）。
+    另外 device_id 是外部输入，本来就不该当内部 key。
+    """
+    return (d.id, d.be)
+
 
 MUSIC_CODES = {0, 1, 2, 3, 4, 5}  # 停止/播放/暂停/下一首/上一首/设音量
 TRACK_TOTAL = 9  # 曲目总数，下一首/上一首在这里回绕，别推出 0 或 10
@@ -149,7 +161,7 @@ def get_device_status(
         return fail(40400, "设备不存在")
 
     t = latest_telemetry(db, d)
-    music = _music_state.get(d.device_id, {})
+    music = _music_state.get(_music_key(d), {})
 
     return ok(
         {
@@ -188,7 +200,7 @@ def control_music(
         return fail(40002, "音量需要在 0–30 之间")
 
     st = _music_state.setdefault(
-        d.device_id, {"state": 0, "track": 1, "volume": DEFAULT_VOLUME}
+        _music_key(d), {"state": 0, "track": 1, "volume": DEFAULT_VOLUME}
     )
 
     if body.command == 0:
