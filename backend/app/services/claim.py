@@ -39,6 +39,11 @@ def issue_claim(db: Session, device_pk: int) -> str:
     if d is None:
         raise ClaimError(40400, "设备不存在")
 
+    # 已有主人的设备发码是空转：码能生成，但认领会卡在第 9 步。
+    # 与其让管理员发一个必然失败的码，不如在源头拒掉。
+    if d.owner_id is not None:
+        raise ClaimError(40900, "设备已有主人，请先解绑")
+
     if d.handover_state != "ready":
         raise ClaimError(40900, "设备交接未完成，不能发配对码")
 

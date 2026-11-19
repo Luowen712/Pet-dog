@@ -103,6 +103,26 @@ def test_issue_claim_rejects_handover_required():
         db.close()
 
 
+def test_issue_claim_rejects_owned_device():
+    """已有主人的设备不该发出码。
+
+    发出去也不会有人能认领——claim_device 第 9 步会拒。
+    但那样管理员要等到用户投诉才知道自己发了个废码，所以在源头拦。
+    """
+    db = SessionLocal()
+    try:
+        u = _mk_user(db, "clm_owner")
+        d = _mk_device(db, "CLM-OWNED", owner_id=u.id)
+        try:
+            issue_claim(db, d.id)
+            raise AssertionError("设备已有主人却发出了配对码")
+        except ClaimError as e:
+            assert e.code == 40900
+            assert "已有主人" in e.message
+    finally:
+        db.close()
+
+
 def test_issue_claim_stores_hash_not_plaintext():
     db = SessionLocal()
     try:
