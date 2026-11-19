@@ -29,6 +29,10 @@ from app.security import hash_pwd
 PASSWORD_MIN = 10
 PASSWORD_MAX = 128
 
+from app.models import Device, User
+from app.services.claim import ClaimError, issue_claim
+
+
 # 与 app/routers/auth.py 的 USERNAME_RE 同一口径。
 # 不直接 import 是为了让 CLI 不依赖 FastAPI 路由层。
 USERNAME_RE = re.compile(r"[a-zA-Z0-9_\u4e00-\u9fa5]{3,20}")
@@ -165,10 +169,38 @@ def cmd_reset(username: str) -> int:
     return 0
 
 
+def cmd_issue_claim(device_ref: str) -> int:
+    device_ref = device_ref.strip()
+
+    with admin_lock():
+        db = SessionLocal()
+        try:
+            d = None
+            if device_ref.isdigit():
+                d = db.query(Device).filter(Device.id == int(device_ref)).first()
+            if d is None:
+                d = db.query(Device).filter(Device.device_id == device_ref).first()
+            if d is None:
+                raise CliError("设备不存在：%s" % device_ref)
+
+            code = issue_claim(db, d.id)
+
+            print("配对码：%s" % code)
+            print(
+                "设备：%s (id=%d)  有效期 10 分钟，只显示这一次，立刻抄下来"
+                % (d.device_id, d.id)
+            )
+        finally:
+            db.close()
+
+    return 0
+
+
 USAGE = """用法：
   python cli.py create-admin <username>   交互式设置密码并创建管理员
   python cli.py list-admin                列出所有管理员（只读）
-  python cli.py reset <username>          交互式重置密码并踢掉旧 token"""
+  python cli.py reset <username>          交互式重置密码并踢掉旧 token
+  python cli.py issue-claim <设备>         为设备生成配对码（明文仅显示一次）"""
 
 
 def main(argv=None) -> int:
@@ -196,6 +228,11 @@ def main(argv=None) -> int:
                 raise CliError("用法：python cli.py reset <username>")
             return cmd_reset(rest[0])
 
+        if cmd == "issue-claim":
+            if len(rest) != 1:
+                raise CliError("用法：python cli.py issue-claim <设备主键或设备编号>")
+            return cmd_issue_claim(rest[0])
+
         print(USAGE)
         return 2
 
@@ -207,6 +244,10 @@ def main(argv=None) -> int:
     except CliError as e:
         print("[错误] %s" % e, file=sys.stderr)
         return e.exit_code
+
+    except ClaimError as e:
+        print("[错误] %s (%d)" % (e.message, e.code), file=sys.stderr)
+        return 2
 
     except Exception as e:
         print("[失败] %s: %s" % (type(e).__name__, e), file=sys.stderr)

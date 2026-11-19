@@ -4,12 +4,21 @@ from fastapi import APIRouter, Depends  # 路由容器 + 依赖注入标记
 from pydantic import BaseModel  # 声明请求体的形状
 from sqlalchemy.orm import Session  # 类型标注用，运行时不做任何事
 
-from app.config import settings #配置（DEV_HEARTBEAT开关）
+from app.config import settings  # 配置（DEV_HEARTBEAT开关）
 from app.db import get_db  # Session 工厂（依赖）
 from app.deps import current_user  # 登录校验（依赖）
-from app.models import Device, Telemetry  # 两张表的映射类
+from app.models import Device  # 设备表的映射类
 from app.resp import fail, ok  # 统一响应外壳
+from app.services import claim as claim_service
 from app.services import presence
+from app.services.claim import ClaimError
+from app.services.ownership import (
+    battery_of,
+    get_owned_device,
+    latest_telemetry,
+    latest_telemetry_map,
+    list_claimable_devices,
+)
 
 router = APIRouter(prefix="/api/devices", tags=["设备"])
 
@@ -48,42 +57,45 @@ def device_out(d: Device, battery: int, online: bool | None = None) -> dict:
     }
 
 
-def get_owned_device(db: Session, uid: int, device_pk: int) -> Device | None:
-
-    return (
-        db.query(Device).filter(Device.id == device_pk, Device.owner_id == uid).first()
-    )
-
-
-def latest_telemetry(db: Session, d: Device) -> Telemetry | None:
-    return (
-        db.query(Telemetry)
-        .filter(Telemetry.device_id == d.device_id)
-        .order_by(Telemetry.created_at.desc(), Telemetry.id.desc())
-        .first()
-    )
-
-
-# 电量
-
-
-def latest_battery(db: Session, d: Device) -> int:
-    t = latest_telemetry(db, d)
-    return t.battery if t and t.battery is not None else 0
-
-
 # 获取设备列表，供页面显示和选择设备
 @router.get("")
 def list_devices(user: dict = Depends(current_user), db: Session = Depends(get_db)):
     devices = db.query(Device).filter(Device.owner_id == user.get("uid")).all()
-
+    tmap = latest_telemetry_map(db, devices)
     at = datetime.now()
-    data = []
-    for d in devices:
-        data.append(
-            device_out(d, latest_battery(db, d), presence.is_online(d.last_seen, at))
-        )
+    data = [
+        device_out(d, battery_of(tmap.get(d.id)), presence.is_online(d.last_seen, at))
+        for d in devices
+    ]
     return ok(data)
+
+
+@router.get("/claimable")
+def list_claimable(user: dict = Depends(current_user), db: Session = Depends(get_db)):
+    rows = list_claimable_devices(db)
+    return ok([{"id": d.id, "name": d.name or f"桌宠{d.id}"} for d in rows])
+
+
+class ClaimIn(BaseModel):
+    device_id: int
+    code: str
+
+
+# 用配对码认领设备（06:77）。业务错误走 HTTP200 + 业务码，不能冒成 500。
+# code 不在这里加 pattern：不匹配会抛 RequestValidationError，
+# 被 errors.py 统一成 40000，而契约要的是 40002。
+@router.post("/claim")
+def claim_device(
+    body: ClaimIn,
+    user: dict = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        d = claim_service.claim_device(db, user.get("uid"), body.device_id, body.code)
+    except ClaimError as e:
+        return fail(e.code, e.message)
+
+    return ok(device_out(d, battery_of(latest_telemetry(db, d))))
 
 
 # 获取单台设备的完整信息
@@ -94,7 +106,7 @@ def get_device(
     d = get_owned_device(db, user.get("uid"), id)
     if not d:
         return fail(40400, "设备不存在")
-    return ok(device_out(d, latest_battery(db, d)))
+    return ok(device_out(d, battery_of(latest_telemetry(db, d))))
 
 
 # 	修改设备名字
@@ -117,7 +129,7 @@ def rename_device(
     db.commit()
     db.refresh(d)
 
-    return ok(device_out(d, latest_battery(db, d)))
+    return ok(device_out(d, battery_of(latest_telemetry(db, d))))
 
 
 _music_state: dict[str, dict] = {}
@@ -142,7 +154,7 @@ def get_device_status(
     return ok(
         {
             "device_id": d.id,
-            "battery": t.battery if t and t.battery is not None else 0,
+            "battery": battery_of(t),
             "voltage": 0.0,  # 等 0x03 上报 mV / 1000
             "action": t.action if t and t.action is not None else 49,  # 49 = 0x31 站立
             "face": 0,  # 等 0x03 上报表情编号
@@ -199,7 +211,9 @@ def control_music(
         {"ok": True, "state": st["state"], "track": st["track"], "volume": st["volume"]}
     )
 
+
 if settings.DEV_HEARTBEAT:
+
     class HeartbeatIn(BaseModel):
         device_id: str
 
@@ -211,5 +225,5 @@ if settings.DEV_HEARTBEAT:
         d.last_seen = datetime.now()
         db.commit()
         return ok(
-            {"device_id": d.id, "online":True, "last_heartbeat": to_iso(d.last_seen)}
+            {"device_id": d.id, "online": True, "last_heartbeat": to_iso(d.last_seen)}
         )
