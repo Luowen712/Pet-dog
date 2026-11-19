@@ -1,3 +1,4 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -6,15 +7,15 @@ class Settings(BaseSettings):
 
     APP_NAME: str = "桌面宠物后端"
     PORT: int = 8000
-    DB_URL: str = "mysql+pymysql://petdog:petdog@127.0.0.1:3306/pet_dog?charset=utf8mb4"
+    DB_URL: str = Field(min_length=1)
     SERIAL_PORT: str = "COM5"
     SERIAL_BAUD: int = 9600
-    JWT_SECRET: str = "change-me-in-dotenv"
+    JWT_SECRET: str = Field(min_length=32)
+    # 配对码 HMAC 密钥，刻意与 JWT_SECRET 分开（见 02 的 BB03 第 3 条）：
+    # 轮换登录密钥不该连带作废未使用的配对码，单点泄露也不该同时打开配对码的离线穷举。
+    # 与 JWT_SECRET 同一套 fail-closed 口径：不给默认值，缺了就起不来。
+    CLAIM_SECRET: str = Field(min_length=32)
     JWT_EXPIRE_HOURS: int = 24
-    ACK_TIMEOUT: float = 3.0
-    WEATHER_LAT: float = 39.90
-    WEATHER_LON: float = 116.40
-    WEATHER_CITY: str = "北京"
     ONLINE_TTL_SEC: int = 30
     DEV_HEARTBEAT: bool = False
 

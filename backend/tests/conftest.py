@@ -59,3 +59,17 @@ Base.metadata.drop_all(bind=engine)
 with engine.begin() as conn:
     conn.execute(text("DROP TABLE IF EXISTS alembic_version"))
 Base.metadata.create_all(bind=engine)
+
+# ⑤ 每个用例前后清空限流桶。
+# 限流器是进程内全局状态，而 TestClient 的来源 IP 固定为 "testclient"，
+# 不清的话上个用例打满的桶会带到下一个用例，表现为「单跑通过、全量失败」。
+import pytest  # noqa: E402
+
+from app import ratelimit  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _reset_ratelimit():
+    ratelimit.reset()
+    yield
+    ratelimit.reset()

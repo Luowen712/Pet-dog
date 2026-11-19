@@ -23,8 +23,16 @@ def current_user(
     if not data:
         raise HTTPException(401, detail={"code": 40101, "message": "登录已过期"})
 
+    # 旧 token 没有 tv 声明：按失效处理，一律拒绝。
+    # 绝不能写成 data.get("tv", 0) —— 那等于把所有历史旧票默认当成 tv=0，
+    # 而绝大多数账号的 token_version 恰好就是 0，旧票会集体复活。
+    tv = data.get("tv")
+    if tv is None:
+        raise HTTPException(401, detail={"code": 40101, "message": "登录已过期"})
+
     u = db.query(User).filter(User.id == data.get("uid")).first()
-    if u is None or u.token_version != data.get("tv") or u.status != "active":
+    # status 只认 active：disabled / revoking / revoked 全部拒绝（06§2）。
+    if u is None or u.token_version != tv or u.status != "active":
         raise HTTPException(401, detail={"code": 40101, "message": "登录已过期"})
 
     return data
