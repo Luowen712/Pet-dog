@@ -534,6 +534,12 @@ x-open-questions:
     detail: |
       02:227 对新密码要求 Argon2id、10～128 字符；现实现为 6 位以上。
       本文件不给 RegisterRequest.password 写长度上限，等 06 明确后再定。
+  - id: Q4
+    question: 06 第12节新增条款的确认
+    detail: |
+      12.1 有效上行与 9 秒离线、12.3 看门狗后的主机侧终态、12.5 冲突码固定 02、12.6 非 9 字节 03 已可按本文实现。
+      12.2 的“收 06 后重置 5 秒周期”与 12.4 的“face 越界丢弃”是固件侧行为，待嵌入A书面确认；
+      任一方不确认就回到 06 改，不在固件里另做一套。
 
 components:
   securitySchemes:
@@ -954,6 +960,7 @@ components:
           type: string
         online:
           type: boolean
+          description: 9 秒内无有效上行即为 false；有效上行的定义见 06 第12.1节
         firmware:
           type: string
         last_heartbeat:
@@ -1009,6 +1016,7 @@ components:
           type: boolean
         control_state:
           type: string
+          description: online 只表达链路事实，control_state 表达可控制性；两者同时成立时的呈现优先级与进入条件见 06 第12.1节、第12.3节
           enum: [unconfigured, offline, ready, busy, recovery_required, handover_required, faulted]
         session_id:
           type: string
