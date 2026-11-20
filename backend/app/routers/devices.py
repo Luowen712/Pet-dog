@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session  # 类型标注用，运行时不做任何事
 from app.config import settings  # 配置（DEV_HEARTBEAT开关）
 from app.db import get_db  # Session 工厂（依赖）
 from app.deps import current_user  # 登录校验（依赖）
-from app.models import Device  # 设备表的映射类
+from app.models import Device, DeviceClaim  # 设备表 + 配对码表的映射类
 from app.resp import fail, ok  # 统一响应外壳
 from app.services import claim as claim_service
 from app.services import presence
@@ -222,6 +222,41 @@ def control_music(
     return ok(
         {"ok": True, "state": st["state"], "track": st["track"], "volume": st["volume"]}
     )
+
+
+class BindingDeleteIn(BaseModel):
+    # 契约 BindingDeleteRequest：只需一个确认字段，防止前端点错设备
+    confirm_device_id: int
+
+
+# 解绑设备（06:78、06:296）
+@router.delete("/{id}/binding")
+def unbind_device(
+    id: int,
+    body: BindingDeleteIn,
+    user: dict = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    # 先判参数、再判归属、最后判状态。顺序反过来的话，错误码的差异
+    # 就成了「这个 id 到底存不存在」的探测器。
+    if body.confirm_device_id != id:
+        return fail(40002, "确认设备 id 不匹配")
+    d = get_owned_device(db, user.get("uid"), id)
+    if not d:
+        return fail(40400, "设备不存在")
+    # 只有 bound 的设备能解绑。已经是 claimable / retired 的没有绑定可解
+    if d.status != "bound":
+        return fail(40900, "设备当前状态不允许解绑")
+    old_be = d.be
+    d.owner_id = None
+    d.status = "claimable"
+    d.handover_state = "required"
+    d.bound_at = None
+    _music_state.pop((d.id, old_be), None)
+    d.be = old_be + 1
+    db.query(DeviceClaim).filter(DeviceClaim.device_pk == d.id).delete()
+    db.commit()
+    return ok({"unbound": True, "handover_required": True})
 
 
 if settings.DEV_HEARTBEAT:

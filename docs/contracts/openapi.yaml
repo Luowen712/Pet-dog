@@ -335,7 +335,7 @@ paths:
       description: |
         confirm_device_id 必须等于路径 id（06:78）。解绑不是急停：提交前已经写出的动作可能继续（06:301）。
       operationId: unbindDevice
-      x-impl-status: not-implemented
+      x-impl-status: implemented
       x-business-errors: [40002, 40400, 40900]
       requestBody:
         required: true
