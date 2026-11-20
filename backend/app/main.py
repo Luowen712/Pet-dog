@@ -6,8 +6,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.staticfiles import StaticFiles
 
+from app.config import settings
 from app.db import SessionLocal
 from app.errors import register_handlers
+from app.link.lock import LOCK_NAME, HostProcessLock, ProcessLock
+from app.link.send_gate import send_gate
 from app.ratelimit import assert_single_process
 from app.resp import ok
 from app.routers import auth, devices, faces, setup
@@ -15,28 +18,71 @@ from app.services.purge import purge_revoking
 
 
 BASE_DIR = Path(__file__).resolve().parent
+PROTOCOL_VERSION = "3.1"
+
+# 06:46 禁止 allow_origins=["*"] 与 allow_credentials=True 同时开启。
+# 首版生产走同源部署；开发期跨端口仅放行本机 Vite 前端源。
+DEV_CORS_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
 
 
-# 启动钩子：服务起来后、接第一个请求前，把上次没清完的 revoking 账号清掉。
-# 必须在 app = FastAPI(lifespan=...) 之前定义，否则引用不到。
+def _health_mode() -> str:
+    spec = settings.SERIAL_PORT.strip().lower()
+    if spec == "sim" or spec.startswith("loop://"):
+        return "sim"
+    return "serial"
+
+
+# 启动钩子（BA02 第 1、5 条）：
+# 1. 先取本机排他进程锁，再取 MySQL 实例锁；任一失败拒绝启动，绝不降级无锁运行；
+# 2. 清理上次未完成的 revoking 账号；
+# 3. 关闭时按反序：先停设备会话，再放 DB 实例锁，最后放主机锁。
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 这里绝不能抛异常：数据库没起来时服务仍要能启动（接口自己会报错），
-    # 否则一次连不上就整个后端起不来，比不清理更糟。
+    host_lock_path = getattr(app.state, "host_lock_path", None)
+    db_lock_name = getattr(app.state, "db_lock_name", LOCK_NAME)
+
+    host_lock = HostProcessLock(path=host_lock_path)
+    process_lock = ProcessLock(name=db_lock_name)
+
+    host_lock.acquire()
     try:
-        db = SessionLocal()
+        process_lock.acquire()
+    except BaseException:
+        host_lock.release()
+        raise
+
+    app.state.host_lock = host_lock
+    app.state.process_lock = process_lock
+    app.state.send_gate = send_gate
+    app.state.device_session = None
+
+    try:
         try:
-            r = purge_revoking(db)
-            if r["purged"] or r["failed"]:
-                print(
-                    "[启动清理] revoking → revoked: %d 个，失败 %d 个"
-                    % (r["purged"], r["failed"])
-                )
-        finally:
-            db.close()
-    except Exception as e:
-        print("[启动清理] 已跳过（数据库不可用？）：%s" % e)
-    yield
+            db = SessionLocal()
+            try:
+                r = purge_revoking(db)
+                if r["purged"] or r["failed"]:
+                    print(
+                        "[启动清理] revoking → revoked: %d 个，失败 %d 个"
+                        % (r["purged"], r["failed"])
+                    )
+            finally:
+                db.close()
+        except Exception as e:
+            print("[启动清理] 已跳过（数据库不可用？）：%s" % e)
+        yield
+    finally:
+        session = getattr(app.state, "device_session", None)
+        if session is not None:
+            try:
+                session.close()
+            finally:
+                app.state.device_session = None
+        process_lock.release()
+        host_lock.release()
 
 
 # 限流是单进程内存计数器（06§2）：多 worker 时每个进程各算一份，实际阈值
@@ -50,7 +96,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=DEV_CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -82,4 +128,10 @@ def custom_docs():
 
 @app.get("/api/health")
 def health():
-    return ok({"status": "ok", "mode": "serial"})
+    return ok(
+        {
+            "status": "ok",
+            "mode": _health_mode(),
+            "protocol_version": PROTOCOL_VERSION,
+        }
+    )
