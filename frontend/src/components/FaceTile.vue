@@ -32,6 +32,37 @@ const def = computed(() => FACE_BY_ID.get(props.face) ?? FACES[0])
         <circle cx="84" cy="12" r="7" />
         <circle cx="84" cy="12" r="2.6" class="solid" />
       </template>
+      <!-- 硬件屏的两块方眼：实心、略微内八 -->
+      <template v-else-if="def.eyes === 'square'">
+        <rect
+          class="solid"
+          x="33"
+          y="5.5"
+          width="17"
+          height="14"
+          rx="1.5"
+          transform="rotate(7 41.5 12.5)"
+        />
+        <rect
+          class="solid"
+          x="78"
+          y="5.5"
+          width="17"
+          height="14"
+          rx="1.5"
+          transform="rotate(-7 86.5 12.5)"
+        />
+      </template>
+      <!-- 硬件屏的两枚竖圆眼：胶囊状实心，几乎顶满 32px 高度 -->
+      <template v-else-if="def.eyes === 'capsule'">
+        <rect class="solid" x="36" y="4.5" width="15" height="20" rx="7.5" />
+        <rect class="solid" x="77" y="4.5" width="15" height="20" rx="7.5" />
+      </template>
+      <!-- 硬件屏的 `> <` 眼：尖角朝内 -->
+      <template v-else-if="def.eyes === 'chevron'">
+        <path d="M38 6 L50 13 L38 20" />
+        <path d="M90 6 L78 13 L90 20" />
+      </template>
       <template v-else>
         <path
           class="solid"
@@ -55,6 +86,12 @@ const def = computed(() => FACE_BY_ID.get(props.face) ?? FACES[0])
       <template v-else-if="def.mouth === 'cat'">
         <path d="M57 22 Q60.5 26.5 64 22 Q67.5 26.5 71 22" />
       </template>
+      <!-- 硬件屏的 ω 嘴：两个开口朝上的小弧（微笑） -->
+      <template v-else-if="def.mouth === 'omega'">
+        <path d="M55 22.5 Q59.5 27.5 64 22.5 Q68.5 27.5 73 22.5" />
+      </template>
+      <!-- 硬件上这几张脸只有眼睛，没有嘴 -->
+      <template v-else-if="def.mouth === 'none'" />
       <template v-else>
         <line x1="57" y1="24" x2="71" y2="24" />
       </template>
