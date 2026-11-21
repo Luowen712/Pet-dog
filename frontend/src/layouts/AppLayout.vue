@@ -32,11 +32,12 @@ const showOffline = computed(() => pet.socketStatus === 'closed' && everConnecte
 const pageTitle = computed(() => (typeof route.meta.title === 'string' ? route.meta.title : '控制台'))
 const initial = computed(() => auth.user?.name?.slice(0, 1) ?? 'A')
 
+// 账号页不占顶部导航：入口收在右上角用户菜单的「账号管理」里，
+// 和「切换账号」「退出登录」放在一起，避免同一页面出现两个入口。
 const navItems = [
   { path: '/devices', label: '设备', icon: 'Monitor' },
   { path: '/console', label: '控制台', icon: 'Odometer' },
   { path: '/faces', label: '表情', icon: 'Sunny' },
-  { path: '/account', label: '账号', icon: 'User' },
 ]
 
 onMounted(async () => {
