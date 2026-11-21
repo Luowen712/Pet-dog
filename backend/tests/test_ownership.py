@@ -1,10 +1,12 @@
 """BB03 第 1 条：归属查询收口 + 遥测按绑定纪元隔离。"""
 
+from datetime import datetime, timedelta
+
 from fastapi.testclient import TestClient
 
 from app.db import SessionLocal
 from app.main import app
-from app.models import Device, Telemetry, User
+from app.models import Device, DeviceClaim, Telemetry, User
 from app.security import make_token
 from app.services.ownership import (
     battery_of,
@@ -147,5 +149,123 @@ def test_claimable_excludes_bound_device():
         )
         ids = {x["id"] for x in r.json()["data"]}
         assert d.id not in ids
+    finally:
+        db.close()
+
+
+# ---------------- BB03 第 5 条：解绑即撤权 ----------------
+#
+# 下面四个用例都走真实 HTTP，不用 client.delete()：旧版 httpx 的
+# delete() 不接受 json 参数，用 request("DELETE", ...) 才能带请求体。
+
+
+def _unbind(token: str, pk: int, confirm: int):
+    return client.request(
+        "DELETE",
+        f"/api/devices/{pk}/binding",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"confirm_device_id": confirm},
+    )
+
+
+def test_unbind_clears_five_columns_and_bumps_epoch():
+    """解绑必须一次改五列 + be+1 + 作废旧配对码，缺一列就违反 CHECK。"""
+    db = SessionLocal()
+    pk = None
+    try:
+        u, token = _token_for(db, "ub_ok")
+        d = _mk_device(db, "UB-OK", owner_id=u.id, be=0)
+        db.add(
+            DeviceClaim(
+                device_pk=d.id,
+                code_hash="h" * 64,
+                expires_at=datetime.now() + timedelta(minutes=10),
+            )
+        )
+        db.commit()
+        pk = d.id
+
+        r = _unbind(token, pk, pk)
+        assert r.status_code == 200, "统一信封要求业务错误也走 HTTP 200"
+        body = r.json()
+        assert body["code"] == 0
+        assert body["data"] == {"unbound": True, "handover_required": True}
+    finally:
+        db.close()
+
+    # 换一个 Session 复查：同一连接在 REPEATABLE READ 下已经钉住快照，
+    # 看不到别的会话刚提交的改动，刷新也没用（之前踩过）。
+    db2 = SessionLocal()
+    try:
+        d = db2.query(Device).filter(Device.id == pk).first()
+        assert d.owner_id is None, "owner 没清"
+        assert d.status == "claimable", "status 没回落，CHECK 迟早报 3819"
+        assert d.handover_state == "required", "交接门槛没设，设备会被直接认领走"
+        assert d.bound_at is None, "绑定时间还留着上一任的"
+        assert d.be == 1, "绑定纪元没 +1，新主人会读到上一任的遥测"
+
+        left = db2.query(DeviceClaim).filter(DeviceClaim.device_pk == pk).count()
+        assert left == 0, "旧配对码没作废"
+    finally:
+        db2.close()
+
+
+def test_unbind_confirm_mismatch_returns_40002():
+    """confirm_device_id 与路径 id 不一致时拒绝，且不许改动任何数据。"""
+    db = SessionLocal()
+    pk = None
+    try:
+        u, token = _token_for(db, "ub_confirm")
+        d = _mk_device(db, "UB-CONF", owner_id=u.id)
+        db.commit()
+        pk = d.id
+        owner_before = u.id
+
+        r = _unbind(token, pk, pk + 1)
+        assert r.json()["code"] == 40002
+    finally:
+        db.close()
+
+    db2 = SessionLocal()
+    try:
+        d = db2.query(Device).filter(Device.id == pk).first()
+        assert d.owner_id == owner_before, "参数校验失败却把设备解绑了"
+        assert d.status == "bound"
+    finally:
+        db2.close()
+
+
+def test_unbind_rejects_other_owner():
+    """不是本人的设备一律 40400，不能因为错误码不同暴露设备存在性。"""
+    db = SessionLocal()
+    try:
+        a, _ = _token_for(db, "ub_owner_a")
+        _, token_b = _token_for(db, "ub_owner_b")
+        d = _mk_device(db, "UB-OTHER", owner_id=a.id)
+
+        r = _unbind(token_b, d.id, d.id)
+        assert r.json()["code"] == 40400
+    finally:
+        db.close()
+
+
+def test_unbind_twice_returns_40400_not_40900():
+    """重复解绑落到 40400，而不是契约里写的 40900。
+
+    原因：归属校验在前。第一次解绑后 owner_id 已经是 NULL，
+    第二次调用时 get_owned_device 就返回 None，走不到「status != bound」
+    那句 40900。同理，有 CHECK 保证「有主必 bound」，40900 分支当前不可达，
+    是给未来的 retired 状态预留的防御，不是写错了。
+    """
+    db = SessionLocal()
+    try:
+        u, token = _token_for(db, "ub_twice")
+        d = _mk_device(db, "UB-TWICE", owner_id=u.id)
+
+        first = _unbind(token, d.id, d.id)
+        assert first.json()["code"] == 0
+
+        second = _unbind(token, d.id, d.id)
+        assert second.json()["code"] == 40400
     finally:
         db.close()
