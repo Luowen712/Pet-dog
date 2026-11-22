@@ -17,15 +17,18 @@ from sqlalchemy.orm import Session
 from app.models import Device, Telemetry
 
 
-def get_owned_device(db: Session, uid: int, device_pk: int) -> Device | None:
+def get_owned_device(
+    db: Session, uid: int, device_pk: int, *, for_update: bool = False
+) -> Device | None:
     """只返回「这个人拥有的」设备。不是他的、不存在的，一律 None。
 
     调用方拿到 None 必须返回 40400，不能区分「没这台」和「不是你的」——
     一旦区分，就成了设备存在性探测接口。
     """
-    return (
-        db.query(Device).filter(Device.id == device_pk, Device.owner_id == uid).first()
-    )
+    q = db.query(Device).filter(Device.id == device_pk, Device.owner_id == uid)
+    if for_update:
+        q = q.with_for_update()
+    return q.first()
 
 
 def latest_telemetry(db: Session, d: Device) -> Telemetry | None:
@@ -74,20 +77,3 @@ def battery_of(t: Telemetry | None) -> int | None:
     回填 0 会让前端显示「电量 0%」，用户以为没电跑去插线。
     """
     return t.battery if t is not None else None
-
-
-def list_claimable_devices(db: Session) -> list[Device]:
-    """可认领 = 状态可认领 + 无主 + 交接已完成，三个条件缺一不可。
-
-    这个函数只读，不需要 SendGate（06:191：只读无须 SendGate）。
-    """
-    return (
-        db.query(Device)
-        .filter(
-            Device.status == "claimable",
-            Device.owner_id.is_(None),
-            Device.handover_state == "ready",
-        )
-        .order_by(Device.id)
-        .all()
-    )

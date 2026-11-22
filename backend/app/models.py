@@ -68,7 +68,10 @@ class CommandLog(Base):
     device_pk = Column(
         Integer, ForeignKey("device.id", ondelete="RESTRICT"), nullable=False
     )
+    __table_args__ = (UniqueConstraint('actor_user_id', 'msg_id', name='uq_command_actor_msg'),)
     msg_id = Column(String(36), index=True)
+    error_code = Column(Integer, nullable=True)
+    updated_at = Column(DateTime, nullable=True)
     cmd = Column(Integer)
     action = Column(Integer, nullable=True)
     param = Column(String(128), nullable=True)
@@ -151,29 +154,6 @@ class User(Base):
     )
     # 软删除时间。账号状态仍以 status(active/revoking/revoked) 为准，这里只记时间做审计
     deleted_at = Column(DateTime, nullable=True)
-
-
-# 设备是否有主人,是否被认领
-class DeviceClaim(Base):
-    __tablename__ = "device_claim"
-    id = Column(Integer, primary_key=True)
-    device_pk = Column(
-        Integer, ForeignKey("device.id", ondelete="RESTRICT"), nullable=False
-    )
-    code_hash = Column(String(64), nullable=False)
-    expires_at = Column(DateTime, nullable=False)
-    attempts = Column(Integer, nullable=False, default=0, server_default=text("0"))
-    locked_until = Column(DateTime, nullable=True)
-    consumed_at = Column(DateTime, nullable=True)
-    consumed_by_user_id = Column(
-        Integer, ForeignKey("user.id", ondelete="RESTRICT"), nullable=True
-    )
-    created_at = Column(DateTime, default=datetime.now)
-
-    __table_args__ = (
-        # 一台设备至多一条配对码记录：重新生成配对码走 UPDATE，不是再插一行
-        UniqueConstraint("device_pk", name="uq_device_claim_device"),
-    )
 
 
 class AuditLog(Base):

@@ -35,9 +35,10 @@ async function submitPassword(): Promise<void> {
     return
   }
   passwordSaving.value = true
+  const oldUid = auth.uid
   try {
     await auth.changePassword(passwordForm.old, passwordForm.next)
-    pet.reset()
+    pet.reset(oldUid)
     deviceStore.reset()
     ElMessage.success('密码已修改，请用新密码重新登录')
     await router.replace('/login')
@@ -98,9 +99,10 @@ async function confirmDelete(): Promise<void> {
   }
 
   deleting.value = true
+  const oldUid = auth.uid
   try {
     await auth.deleteAccount(deleteForm.password, deleteForm.username.trim())
-    pet.reset()
+    pet.reset(oldUid)
     deviceStore.reset()
     deleteVisible.value = false
     ElMessage.success('账号已注销')

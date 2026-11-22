@@ -47,18 +47,21 @@ assert tool.db_name_of(settings.DB_URL) == TEST_DB, (
 )
 assert tool.db_name_of(settings.DB_URL) not in tool.FORBIDDEN_DB_NAMES
 
-# ④ 库已由 root 建好并授权，这里只负责把表清空重建
-from sqlalchemy import text  # noqa: E402
+# ④ 库已由 root 建好并授权，这里只负责把测试库所有旧表清空重建（含历史已移除的表）
+from sqlalchemy import inspect, text  # noqa: E402
 
 import app.models  # noqa: E402,F401
-from app.db import Base, engine  # noqa: E402
+from app.db import engine  # noqa: E402
 
-Base.metadata.drop_all(bind=engine)
-# 顺带清掉版本戳：否则库里会留下"表是 create_all 建的、版本号却写着 0001"的假象，
-# 之后跑 alembic 会以为这一版已经做完而跳过 DDL。
 with engine.begin() as conn:
-    conn.execute(text("DROP TABLE IF EXISTS alembic_version"))
-Base.metadata.create_all(bind=engine)
+    conn.execute(text("SET FOREIGN_KEY_CHECKS = 0"))
+    for tbl in inspect(conn).get_table_names():
+        conn.execute(text(f"DROP TABLE IF EXISTS `{tbl}`"))
+    conn.execute(text("SET FOREIGN_KEY_CHECKS = 1"))
+from alembic import command
+from alembic.config import Config
+
+command.upgrade(Config(str(BACKEND / 'alembic.ini')), 'head')
 
 # ⑤ 每个用例前后清空限流桶。
 # 限流器是进程内全局状态，而 TestClient 的来源 IP 固定为 "testclient"，

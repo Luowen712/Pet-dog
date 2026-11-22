@@ -1,24 +1,31 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends  # 路由容器 + 依赖注入标记
+from fastapi import APIRouter, Depends, HTTPException, Request  # 路由容器 + 依赖注入标记
 from pydantic import BaseModel  # 声明请求体的形状
+from serial import SerialException
 from sqlalchemy.orm import Session  # 类型标注用，运行时不做任何事
 
+from app import ratelimit
 from app.config import settings  # 配置（DEV_HEARTBEAT开关）
-from app.db import get_db  # Session 工厂（依赖）
+from app.db import SessionLocal, get_db  # Session 工厂（依赖）
 from app.deps import current_user  # 登录校验（依赖）
-from app.models import Device, DeviceClaim  # 设备表 + 配对码表的映射类
+from app.link.ble_link import BleUnavailableError
+from app.link.send_gate import RevokeEvent, send_gate
+from app.link.serial_link import open_port
+from app.models import Device  # 设备表映射类
 from app.resp import fail, ok  # 统一响应外壳
-from app.services import claim as claim_service
+from app.services import ble as ble_service
 from app.services import presence
-from app.services.claim import ClaimError
+from app.services.ble import BleBindError
 from app.services.ownership import (
     battery_of,
     get_owned_device,
     latest_telemetry,
     latest_telemetry_map,
-    list_claimable_devices,
 )
+
+SUPPORTED_ACTIONS = [0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36]
 
 router = APIRouter(prefix="/api/devices", tags=["设备"])
 
@@ -38,75 +45,232 @@ class RenameIn(BaseModel):
     name: str
 
 
-class MusicIn(BaseModel):
-    command: int
-    value: int = 0
 
 
-def device_out(d: Device, battery: int, online: bool | None = None) -> dict:
-    if online is None:
-        online = presence.is_online(d.last_seen)
+def _live_session(request: Request | None, device_pk: int):
+    if request is None:
+        return None
+    sess = getattr(request.app.state, "device_session", None)
+    if sess is not None and sess.device_pk == device_pk:
+        return sess
+    return None
+
+
+def device_out(
+    d: Device,
+    battery: int | None,
+    online: bool | None = None,
+    *,
+    session=None,
+) -> dict:
+    snap = session.snapshot() if session is not None else None
+    if snap is not None and snap.be != d.be:
+        snap = None
+    if snap is not None:
+        is_on = snap.online
+        ctrl = snap.control_state
+        bat = snap.battery
+        last_hb = snap.last_heartbeat
+    else:
+        is_on = presence.is_online(d.last_seen) if online is None else online
+        if d.handover_state != "ready":
+            ctrl = "handover_required"
+        else:
+            ctrl = "unconfigured" if is_on else "offline"
+        bat = battery
+        last_hb = d.last_seen
+
     return {
         "id": d.id,
         "name": d.name or f"桌宠{d.id}",
-        "online": online,
+        "online": is_on,
         "firmware": d.firmware or "",
-        "last_heartbeat": to_iso(d.last_seen),
-        "battery": battery,
+        "last_heartbeat": to_iso(last_hb),
+        "battery": bat,
         "location": "",
+        "binding_state": d.status or "claimable",
+        "control_state": ctrl,
+        "supported_actions": list(snap.supported_actions) if snap is not None else [],
     }
 
 
 # 获取设备列表，供页面显示和选择设备
 @router.get("")
-def list_devices(user: dict = Depends(current_user), db: Session = Depends(get_db)):
+def list_devices(
+    request: Request,
+    user: dict = Depends(current_user),
+    db: Session = Depends(get_db),
+):
     devices = db.query(Device).filter(Device.owner_id == user.get("uid")).all()
     tmap = latest_telemetry_map(db, devices)
     at = datetime.now()
     data = [
-        device_out(d, battery_of(tmap.get(d.id)), presence.is_online(d.last_seen, at))
+        device_out(
+            d,
+            battery_of(tmap.get(d.id)),
+            presence.is_online(d.last_seen, at),
+            session=_live_session(request, d.id),
+        )
         for d in devices
     ]
     return ok(data)
 
 
-@router.get("/claimable")
-def list_claimable(user: dict = Depends(current_user), db: Session = Depends(get_db)):
-    rows = list_claimable_devices(db)
-    return ok([{"id": d.id, "name": d.name or f"桌宠{d.id}"} for d in rows])
+@router.get("/ble/scan")
+async def scan_ble(request: Request, user: dict = Depends(current_user)):
+    uid = user.get("uid")
+    bucket = f"ble_scan:{uid}"
+    wait = ratelimit.check(bucket, 20, 60)
+    if wait:
+        raise ratelimit.too_many(wait)
+    ratelimit.record(bucket, 60)
 
-
-class ClaimIn(BaseModel):
-    device_id: int
-    code: str
-
-
-# 用配对码认领设备（06:77）。业务错误走 HTTP200 + 业务码，不能冒成 500。
-# code 不在这里加 pattern：不匹配会抛 RequestValidationError，
-# 被 errors.py 统一成 40000，而契约要的是 40002。
-@router.post("/claim")
-def claim_device(
-    body: ClaimIn,
-    user: dict = Depends(current_user),
-    db: Session = Depends(get_db),
-):
+    discover_fn = getattr(request.app.state, "ble_discover_override", None)
     try:
-        d = claim_service.claim_device(db, user.get("uid"), body.device_id, body.code)
-    except ClaimError as e:
+        candidates = await ble_service.discover_ble_candidates(discover_fn=discover_fn)
+    except BleUnavailableError as exc:
+        return fail(40900, str(exc))
+
+    def _filter():
+        with SessionLocal() as db:
+            return ble_service.filter_ble_candidates(db, uid, candidates)
+
+    items = await asyncio.to_thread(_filter)
+    return ok(items)
+
+
+class BleConnectIn(BaseModel):
+    address: str
+    name: str | None = None
+
+
+# 低功耗蓝牙直接连接并绑定当前账号（取消 6 位配对码流程，见 06 第 12.7 节）
+@router.post("/ble/connect")
+async def connect_ble(
+    body: BleConnectIn,
+    request: Request,
+    user: dict = Depends(current_user),
+):
+    uid = user.get("uid")
+    try:
+        addr = ble_service.normalize_ble_address(body.address)
+        clean_name = ble_service.normalize_device_name(body.name, addr)
+    except BleBindError as e:
         return fail(e.code, e.message)
 
-    return ok(device_out(d, battery_of(latest_telemetry(db, d))))
+    has_lifespan = getattr(request.app.state, "process_lock", None) is not None
+    session_lock = getattr(request.app.state, "session_lock", None)
+    sim_mode = ble_service.is_sim_mode()
+
+    async def _run_connect():
+        cur_session = getattr(request.app.state, "device_session", None)
+
+        def _precheck():
+            with SessionLocal() as db:
+                existing_row = ble_service.precheck_ble_bind(db, uid, addr)
+                if cur_session is not None and (
+                    existing_row is None or cur_session.device_pk != existing_row.id
+                ):
+                    active_dev = db.get(Device, cur_session.device_pk)
+                    if (
+                        active_dev is not None
+                        and active_dev.owner_id is not None
+                        and active_dev.owner_id != uid
+                        and cur_session.control_state not in ("faulted", "handover_required")
+                    ):
+                        raise BleBindError(40900, "当前主机蓝牙链路正被其他账号设备占用")
+                return existing_row
+
+        try:
+            existing = await asyncio.to_thread(_precheck)
+        except BleBindError as e:
+            if e.code == 40101:
+                raise HTTPException(401, detail={"code": 40101, "message": e.message})
+            return fail(e.code, e.message)
+
+        reuse_session = (
+            existing is not None
+            and existing.owner_id == uid
+            and cur_session is not None
+            and cur_session.device_pk == existing.id
+            and cur_session.be == existing.be
+            and cur_session.online
+            and cur_session.control_state not in ("faulted", "offline", "handover_required")
+        )
+        opened_port = None
+        if has_lifespan and not reuse_session:
+            # 重连同一台设备时先释放旧会话句柄，避免单连接 BLE 模块 ECB02H2 拒连
+            if (
+                cur_session is not None
+                and existing is not None
+                and cur_session.device_pk == existing.id
+            ):
+                from app.main import stop_device_session
+
+                await stop_device_session(request.app)
+
+            port_override = getattr(request.app.state, "ble_port_override", None)
+            spec = "sim" if sim_mode else f"ble://{addr}"
+            try:
+                opened_port = (
+                    port_override(addr)
+                    if callable(port_override)
+                    else await asyncio.to_thread(open_port, spec, baudrate=settings.SERIAL_BAUD)
+                )
+            except (SerialException, OSError) as exc:
+                return fail(40900, f"蓝牙连接失败：{exc}")
+
+        def _bind():
+            with SessionLocal() as db:
+                d, _ = ble_service.bind_ble_device(db, uid, addr, clean_name)
+                bat = battery_of(latest_telemetry(db, d))
+                return d, bat
+
+        try:
+            d, bat = await asyncio.to_thread(_bind)
+        except BaseException as exc:
+            if opened_port is not None:
+                try:
+                    await asyncio.to_thread(opened_port.close)
+                except Exception:
+                    pass
+            if isinstance(exc, BleBindError):
+                if exc.code == 40101:
+                    raise HTTPException(401, detail={"code": 40101, "message": exc.message})
+                return fail(exc.code, exc.message)
+            raise
+
+        if has_lifespan and opened_port is not None:
+            from app.main import start_device_session
+
+            await start_device_session(request.app, d.id, port=opened_port, is_sim=sim_mode)
+
+        return ok(device_out(d, bat, session=_live_session(request, d.id)))
+
+    if session_lock is not None:
+        async with session_lock:
+            return await _run_connect()
+    return await _run_connect()
 
 
 # 获取单台设备的完整信息
 @router.get("/{id}")
 def get_device(
-    id: int, user: dict = Depends(current_user), db: Session = Depends(get_db)
+    id: int,
+    request: Request,
+    user: dict = Depends(current_user),
+    db: Session = Depends(get_db),
 ):
     d = get_owned_device(db, user.get("uid"), id)
     if not d:
         return fail(40400, "设备不存在")
-    return ok(device_out(d, battery_of(latest_telemetry(db, d))))
+    return ok(
+        device_out(
+            d,
+            battery_of(latest_telemetry(db, d)),
+            session=_live_session(request, d.id),
+        )
+    )
 
 
 # 	修改设备名字
@@ -114,6 +278,7 @@ def get_device(
 def rename_device(
     id: int,
     body: RenameIn,
+    request: Request,
     user: dict = Depends(current_user),
     db: Session = Depends(get_db),
 ):
@@ -122,106 +287,46 @@ def rename_device(
         return fail(40400, "设备不存在")
 
     name = body.name.strip()
-    if not (1 <= len(name) <= 20):
-        return fail(40002, "名字需要 1–20 个字符")
+    if not (1 <= len(name) <= 64):
+        return fail(40002, "名字需要 1–64 个字符")
 
     d.name = name
     db.commit()
     db.refresh(d)
 
-    return ok(device_out(d, battery_of(latest_telemetry(db, d))))
+    return ok(
+        device_out(
+            d,
+            battery_of(latest_telemetry(db, d)),
+            session=_live_session(request, d.id),
+        )
+    )
 
 
-_music_state: dict[tuple[int, int], dict] = {}
-
-
-def _music_key(d: Device) -> tuple[int, int]:
-    """音乐状态按 (device_pk, be) 隔离，和遥测用同一套判据。
-
-    用 device_id 当 key 会漏：它是设备自报的字符串，跨绑定纪元不变。
-    设备换主人（be+1）后，新主人查状态会读到上一任的曲目号和音量——
-    和 latest_telemetry 缺 be 条件那处是同一类泄漏（台账 S01）。
-    另外 device_id 是外部输入，本来就不该当内部 key。
-    """
-    return (d.id, d.be)
-
-
-MUSIC_CODES = {0, 1, 2, 3, 4, 5}  # 停止/播放/暂停/下一首/上一首/设音量
-TRACK_TOTAL = 9  # 曲目总数，下一首/上一首在这里回绕，别推出 0 或 10
-DEFAULT_VOLUME = 15  # DFPlayer 量程 0-30
 
 
 # 获取当前选中设备的实时状态快照
-@router.get("/{id}/status")
-def get_device_status(
-    id: int, user: dict = Depends(current_user), db: Session = Depends(get_db)
-):
-    d = get_owned_device(db, user.get("uid"), id)
+@router.get('/{id}/status')
+def get_device_status(id: int, request: Request, user: dict = Depends(current_user), db: Session = Depends(get_db)):
+    d = get_owned_device(db, user['uid'], id)
     if not d:
-        return fail(40400, "设备不存在")
-
-    t = latest_telemetry(db, d)
-    music = _music_state.get(_music_key(d), {})
-
-    return ok(
-        {
-            "device_id": d.id,
-            "battery": battery_of(t),
-            "voltage": 0.0,  # 等 0x03 上报 mV / 1000
-            "action": t.action if t and t.action is not None else 49,  # 49 = 0x31 站立
-            "face": 0,  # 等 0x03 上报表情编号
-            "music_state": music.get(
-                "state", t.music_state if t and t.music_state is not None else 0
-            ),
-            "track": music.get("track", 1),
-            "volume": music.get("volume", DEFAULT_VOLUME),
-            "weather_code": 0,  # 等 0x09 下发/0x03 回报
-            "temp": 0,
-            "updated_at": to_iso(t.created_at if t else d.last_seen)
-            or to_iso(datetime.now()),
-        }
-    )
+        return fail(40400, '设备不存在')
+    session = _live_session(request, id)
+    snap = session.snapshot() if session else None
+    fields = ('battery', 'voltage', 'action', 'face', 'music_state', 'track', 'volume', 'weather_code', 'temp')
+    if snap and snap.be == d.be:
+        return ok(dict(device_id=id, online=snap.online, control_state=snap.control_state,
+                       session_id=snap.session_id, state_revision=snap.state_revision,
+                       updated_at=to_iso(snap.last_heartbeat), **{k: getattr(snap, k) for k in fields}))
+    latest = latest_telemetry(db, d)
+    values = dict.fromkeys(fields)
+    if latest:
+        values.update(battery=latest.battery, action=latest.action, music_state=latest.music_state)
+    return ok(dict(device_id=id, online=presence.is_online(d.last_seen),
+                   control_state=device_out(d, None)['control_state'], session_id=None, state_revision=0,
+                   updated_at=to_iso(latest.created_at if latest else d.last_seen), **values))
 
 
-# 控制音乐播放、切歌和音量
-@router.post("/{id}/music")
-def control_music(
-    id: int,
-    body: MusicIn,
-    user: dict = Depends(current_user),
-    db: Session = Depends(get_db),
-):
-    d = get_owned_device(db, user.get("uid"), id)
-    if not d:
-        return fail(40400, "设备不存在")
-    if body.command not in MUSIC_CODES:
-        return fail(40002, "音乐子命令需要在 0–5 之间")
-    if body.command == 5 and not (0 <= body.value <= 30):
-        return fail(40002, "音量需要在 0–30 之间")
-
-    st = _music_state.setdefault(
-        _music_key(d), {"state": 0, "track": 1, "volume": DEFAULT_VOLUME}
-    )
-
-    if body.command == 0:
-        st["state"] = 0
-    elif body.command == 1:
-        st["state"] = 1
-    elif body.command == 2:
-        st["state"] = 2
-    elif body.command == 3:
-        st["track"] = st["track"] % TRACK_TOTAL + 1
-        st["state"] = 1
-    elif body.command == 4:
-        st["track"] = (st["track"] + TRACK_TOTAL - 2) % TRACK_TOTAL + 1
-        st["state"] = 1
-    else:
-        st["volume"] = body.value
-
-    # TODO 串口起来后在这里发 0x0A 帧（DATA = [command, value]），并推 WS music 事件
-    return ok(
-        {"ok": True, "state": st["state"], "track": st["track"], "volume": st["volume"]}
-    )
 
 
 class BindingDeleteIn(BaseModel):
@@ -231,31 +336,46 @@ class BindingDeleteIn(BaseModel):
 
 # 解绑设备（06:78、06:296）
 @router.delete("/{id}/binding")
-def unbind_device(
+async def unbind_device(
     id: int,
     body: BindingDeleteIn,
+    request: Request,
     user: dict = Depends(current_user),
-    db: Session = Depends(get_db),
 ):
     # 先判参数、再判归属、最后判状态。顺序反过来的话，错误码的差异
     # 就成了「这个 id 到底存不存在」的探测器。
     if body.confirm_device_id != id:
         return fail(40002, "确认设备 id 不匹配")
-    d = get_owned_device(db, user.get("uid"), id)
-    if not d:
-        return fail(40400, "设备不存在")
-    # 只有 bound 的设备能解绑。已经是 claimable / retired 的没有绑定可解
-    if d.status != "bound":
-        return fail(40900, "设备当前状态不允许解绑")
-    old_be = d.be
-    d.owner_id = None
-    d.status = "claimable"
-    d.handover_state = "required"
-    d.bound_at = None
-    _music_state.pop((d.id, old_be), None)
-    d.be = old_be + 1
-    db.query(DeviceClaim).filter(DeviceClaim.device_pk == d.id).delete()
-    db.commit()
+    uid = user.get("uid")
+
+    def _unbind_tx():
+        with send_gate.hold(), SessionLocal() as db:
+            d = get_owned_device(db, uid, id, for_update=True)
+            if not d:
+                return None, fail(40400, "设备不存在")
+            # 只有 bound 的设备能解绑。已经是 claimable / retired 的没有绑定可解
+            if d.status != "bound":
+                return None, fail(40900, "设备当前状态不允许解绑")
+            old_be = d.be
+            d.owner_id = None
+            d.status = "claimable"
+            d.handover_state = "required"
+            d.bound_at = None
+            new_be = old_be + 1
+            d.be = new_be
+            db.commit()
+            return new_be, None
+
+    new_be, err = await asyncio.to_thread(_unbind_tx)
+    if err is not None:
+        return err
+
+    send_gate.notify_revoke(
+        RevokeEvent(uid=uid, device_pk=id, kind="unbind", new_be=new_be)
+    )
+    from app.main import stop_ble_session_if_matching
+
+    await stop_ble_session_if_matching(request.app, {id})
     return ok({"unbound": True, "handover_required": True})
 
 

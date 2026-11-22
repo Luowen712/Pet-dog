@@ -17,6 +17,7 @@ import { getWeather } from '@/api/weather'
 import { DeviceSocket } from '@/utils/ws'
 import type { SocketStatus } from '@/utils/ws'
 import { ApiError } from '@/utils/errors'
+import { handleUnauthorized } from '@/utils/request'
 import {
   clearStoredPending,
   getStoredPending,
@@ -33,8 +34,6 @@ const DISPLAY_TIMEOUT_MS = 8000
 const OK_HOLD_MS = 1500
 /** 未完成（拒绝/结果不明）的黄灯停留时间，到点自动熄灭 */
 const UNFINISHED_HOLD_MS = 5000
-/** pending 映射的保留窗口，避免无限增长 */
-const PENDING_RETIRE_MS = 60000
 /** 一次对账最多查 20 条，契约明确要求不要无限查 */
 const RECONCILE_MAX = 20
 
@@ -84,14 +83,20 @@ export const usePetStore = defineStore('pet', () => {
   const holdTimers = new Map<number, number>()
   /** 每个动作码最新的一条命令；旧命令的迟到回执不许改按钮显示 */
   const latestCmd = new Map<number, string>()
+  /** 同 cmd_id 的单调 revision 与终态记录（防旧回执倒退状态，N01） */
+  const cmdRevision = new Map<string, number>()
+  const terminalCmds = new Set<string>()
+  const TERMINAL_STATUSES = new Set<CommandReceipt['status']>(['done', 'rejected', 'superseded'])
 
   let socket: DeviceSocket | null = null
   /** 连接代次：切设备/重连/换账号都会 +1，异步回来的旧结果一律丢弃 */
   let generation = 0
   let currentDeviceId = 0
   let lastPingAt = 0
-  /** 本次连接是否已经 open 过一次（首次 open 由 connect 里的 loadSnapshot 负责） */
-  let openedOnce = false
+  let lastSessionId: string | null = null
+  let lastStateRevision = -1
+  let syncAttempt = 0
+  let buffer: WsEvent[] | null = null
 
   const connected = computed(() => socketStatus.value === 'open')
   const musicLabel = computed(() => {
@@ -180,20 +185,21 @@ export const usePetStore = defineStore('pet', () => {
       timedOut: false,
     }
     armTimeout(item)
-    item.expiry = window.setTimeout(() => {
-      const live = pending.value[cmdId]
-      if (!live) return
-      if (!live.timedOut && isLatest(live)) {
-        hold(live.action, 'unknown', UNFINISHED_HOLD_MS)
-      }
-      dropPending(cmdId)
-    }, PENDING_RETIRE_MS)
     pending.value[cmdId] = item
     persistPending()
     return item
   }
 
+  function acceptStateRevision(sessionId?: string | null, stateRevision?: number): boolean {
+    if (typeof stateRevision !== 'number') return true
+    if (sessionId && sessionId !== lastSessionId) return false
+    if (stateRevision < lastStateRevision) return false
+    lastStateRevision = stateRevision
+    return true
+  }
+
   function applyState(data: StateData): void {
+    if (!acceptStateRevision(data.session_id, data.state_revision)) return
     online.value = data.online ?? online.value
     controlState.value = data.control_state ?? controlState.value
     battery.value = data.battery
@@ -216,6 +222,12 @@ export const usePetStore = defineStore('pet', () => {
   }
 
   function applyReceipt(receipt: CommandReceipt): void {
+    const rev = typeof receipt.revision === 'number' ? receipt.revision : -1
+    const prevRev = cmdRevision.get(receipt.cmd_id) ?? -1
+    if (rev >= 0 && rev < prevRev) return
+    if (terminalCmds.has(receipt.cmd_id) && !TERMINAL_STATUSES.has(receipt.status)) return
+    if (rev >= 0) cmdRevision.set(receipt.cmd_id, rev)
+
     const item = pending.value[receipt.cmd_id]
     if (!item) return
     if (receipt.seq !== null) item.seq = receipt.seq
@@ -237,17 +249,27 @@ export const usePetStore = defineStore('pet', () => {
         armTimeout(item)
         break
       case 'done':
+        terminalCmds.add(receipt.cmd_id)
         if (latest) hold(item.action, 'ok', OK_HOLD_MS)
-        action.value = receipt.action
         dropPending(receipt.cmd_id)
         break
       case 'rejected':
+        terminalCmds.add(receipt.cmd_id)
         if (latest) hold(item.action, 'fail', UNFINISHED_HOLD_MS)
         ElMessage.error(receipt.reason || '设备拒绝了这条动作')
         dropPending(receipt.cmd_id)
         break
-      case 'unknown':
       case 'superseded':
+        terminalCmds.add(receipt.cmd_id)
+        if (latest) hold(item.action, 'unknown', UNFINISHED_HOLD_MS)
+        dropPending(receipt.cmd_id)
+        break
+      case 'unknown':
+        if (latest) hold(item.action, 'unknown', UNFINISHED_HOLD_MS)
+        clearTimers(item)
+        item.timedOut = true
+        if (receipt.transport === 'write_failed') dropPending(receipt.cmd_id)
+        break
       case 'legacy_unmapped':
         if (latest) hold(item.action, 'unknown', UNFINISHED_HOLD_MS)
         dropPending(receipt.cmd_id)
@@ -280,6 +302,7 @@ export const usePetStore = defineStore('pet', () => {
         onAck(event.data)
         break
       case 'link':
+        if (!acceptStateRevision(event.data.session_id, event.data.state_revision)) break
         online.value = event.data.online
         controlState.value = event.data.control_state
         break
@@ -309,7 +332,6 @@ export const usePetStore = defineStore('pet', () => {
         timedOut: true,
       }
       // 已经是"结果不明"，只保留在 pending 里等重连对账，不再走 8 秒超时
-      item.expiry = window.setTimeout(() => dropPending(refItem.cmd_id), PENDING_RETIRE_MS)
       pending.value[refItem.cmd_id] = item
       if (isLatest(item)) hold(refItem.action, 'unknown', UNFINISHED_HOLD_MS)
     }
@@ -318,7 +340,8 @@ export const usePetStore = defineStore('pet', () => {
   function connect(deviceId: number): void {
     generation += 1
     const gen = generation
-    openedOnce = false
+    buffer = null
+    syncAttempt += 1
     disconnectSocket()
     resetPending()
     resetState()
@@ -335,11 +358,21 @@ export const usePetStore = defineStore('pet', () => {
       deviceId,
       onEvent: (event) => {
         if (gen !== generation) return
-        onEvent(event)
+        if (buffer) {
+          if (buffer.length >= 128) socket?.resync()
+          else buffer.push(event)
+        } else if ((event.event === 'state' || event.event === 'link') &&
+                   event.data.session_id && event.data.session_id !== lastSessionId) {
+          socket?.resync()
+        } else onEvent(event)
       },
       onStatus: (value) => {
         if (gen !== generation) return
         socketStatus.value = value
+        const attempt = ++syncAttempt
+        buffer = value === 'open' ? [] : null
+        online.value = false
+        controlState.value = 'unconfigured'
         if (value === 'closed') {
           // 断线时未拿到终态的命令一律显示"结果不明"，重连后再按 cmd_id 核对
           const affected = Object.values(pending.value).some(
@@ -356,33 +389,20 @@ export const usePetStore = defineStore('pet', () => {
           }
           return
         }
-        if (value !== 'open') return
-        if (!openedOnce) {
-          openedOnce = true
-          void loadSnapshot(deviceId, gen)
-        }
-        // 每次 open（含重连/刷新）都按 cmd_id 向后端核对，避免凭感觉判成功
-        void reconcile(gen)
+        if (value === 'open') void synchronize(deviceId, gen, attempt)
       },
       onClose: (code, message) => {
         if (gen !== generation) return
-        void handleClose(code, message)
+        void handleClose(code, gen, message)
       },
     })
     void socket.connect()
   }
 
-  async function handleClose(code: number, message?: string): Promise<void> {
-    if (code === 1004) {
-      // 身份失效：回登录页
-      const [{ useAuthStore }, { default: router }] = await Promise.all([
-        import('@/stores/auth'),
-        import('@/router'),
-      ])
-      reset()
-      useAuthStore().reset()
-      ElMessage.warning('登录已失效，请重新登录')
-      await router.replace('/login')
+  async function handleClose(code: number, gen: number, message?: string): Promise<void> {
+    if (code === 4401) {
+      // 身份失效：复用 request 层统一登出路径，确保 pet/auth/device 全部清理一致
+      await handleUnauthorized('登录已失效，请重新登录')
       return
     }
     if (code === 1008) {
@@ -391,6 +411,7 @@ export const usePetStore = defineStore('pet', () => {
         import('@/stores/device'),
         import('@/router'),
       ])
+      if (gen !== generation) return
       const deviceStore = useDeviceStore()
       const lostId = currentDeviceId
       reset()
@@ -415,44 +436,32 @@ export const usePetStore = defineStore('pet', () => {
     socketStatus.value = 'closed'
   }
 
-  async function loadSnapshot(deviceId: number, gen: number): Promise<void> {
+  async function synchronize(deviceId: number, gen: number, attempt: number): Promise<void> {
+    const current = () => gen === generation && attempt === syncAttempt
     try {
       const snapshot = await getDeviceStatus(deviceId)
-      if (gen !== generation) return
-      applyState({
-        device_id: snapshot.device_id,
-        online: snapshot.online,
-        control_state: snapshot.control_state,
-        session_id: snapshot.session_id,
-        state_revision: snapshot.state_revision,
-        battery: snapshot.battery,
-        voltage: snapshot.voltage,
-        action: snapshot.action,
-        face: snapshot.face,
-        music_state: snapshot.music_state,
-        track: snapshot.track,
-        volume: snapshot.volume,
-        weather_code: snapshot.weather_code,
-        temp: snapshot.temp,
-      })
+      if (!current()) return
+      if (snapshot.session_id !== lastSessionId) lastStateRevision = -1
+      lastSessionId = snapshot.session_id
+      applyState(snapshot)
+      const events = buffer ?? []
+      buffer = null
+      for (const event of events) onEvent(event)
+      await reconcile(gen, attempt)
     } catch {
-      // 统一错误提示已在 request 层弹过
+      if (current()) socket?.resync()
     }
   }
 
   /** 断线重连/刷新后按 cmd_id 对账，后端记录才是唯一结论 */
-  async function reconcile(gen: number): Promise<void> {
+  async function reconcile(gen: number, attempt: number): Promise<void> {
     if (gen !== generation) return
     const ids = Object.keys(pending.value).slice(0, RECONCILE_MAX)
     await Promise.all(
       ids.map(async (cmdId) => {
         try {
           const receipt = await getCommand(cmdId)
-          if (gen !== generation) return
-          if (!receipt) {
-            dropPending(cmdId)
-            return
-          }
+          if (gen !== generation || syncAttempt !== attempt || !receipt) return
           applyReceipt(receipt)
         } catch {
           // 对账失败不打扰用户，下一次重连还会再来
@@ -465,7 +474,11 @@ export const usePetStore = defineStore('pet', () => {
   async function sendAction(code: number): Promise<void> {
     const gen = generation
     const deviceId = currentDeviceId
-    if (!deviceId) return
+    if (!deviceId || !connected.value || !online.value || controlState.value !== 'ready') return
+    if (Object.keys(pending.value).length >= RECONCILE_MAX) {
+      ElMessage.warning('已有 20 条动作等待对账，请先核对未完成的动作')
+      return
+    }
 
     const cmdId = newCmdId()
     latestCmd.set(code, cmdId)
@@ -484,10 +497,10 @@ export const usePetStore = defineStore('pet', () => {
       const item = pending.value[cmdId]
       if (!item) return
 
-      // 业务拒绝是明确失败；网络/500 是"不知道提交没提交"，只能显示结果不明
+      // 业务/客户端拒绝是明确失败；网络/500 是"不知道提交没提交"，只能显示结果不明
       if (
         error instanceof ApiError &&
-        [40002, 40101, 40400, 40900].includes(error.code)
+        [40000, 40002, 40100, 40101, 40300, 40400, 40900, 42900].includes(error.code)
       ) {
         if (isLatest(item)) hold(code, 'fail', UNFINISHED_HOLD_MS)
         dropPending(cmdId)
@@ -503,12 +516,10 @@ export const usePetStore = defineStore('pet', () => {
   }
 
   async function changeFace(id: number): Promise<void> {
-    const gen = generation
-    if (!currentDeviceId) return
+    if (!currentDeviceId || !connected.value || !online.value || !['ready', 'busy'].includes(controlState.value)) return
     try {
+      // 不做乐观写入：等待后端/设备通过 state 事件回传当前表情（N34）
       await setCurrentFace(currentDeviceId, id)
-      if (gen !== generation) return
-      face.value = id
     } catch {
       // 统一提示由 request 层处理
     }
@@ -547,8 +558,12 @@ export const usePetStore = defineStore('pet', () => {
     holdTimers.forEach((timer) => window.clearTimeout(timer))
     holdTimers.clear()
     latestCmd.clear()
+    cmdRevision.clear()
+    terminalCmds.clear()
     status.value = {}
     lastPingAt = 0
+    lastSessionId = null
+    lastStateRevision = -1
   }
 
   function resetPending(): void {
@@ -556,24 +571,17 @@ export const usePetStore = defineStore('pet', () => {
     pending.value = {}
   }
 
-  function reset(): void {
+  function reset(explicitUid?: number | null): void {
+    const targetUid = explicitUid !== undefined ? explicitUid : uid()
     generation += 1
+    currentDeviceId = 0
+    buffer = null
+    syncAttempt += 1
     resetPending()
     resetState()
     disconnectSocket()
     socketStatus.value = 'closed'
-    online.value = false
-    battery.value = 0
-    voltage.value = 0
-
-    action.value = 0
-    face.value = 0
-    musicState.value = 0
-    track.value = 0
-    volume.value = 15
-
-    weather.value = null
-    clearStoredPending(uid())
+    clearStoredPending(targetUid)
   }
 
   return {
@@ -595,7 +603,6 @@ export const usePetStore = defineStore('pet', () => {
     lastPingAt,
     connect,
     disconnect,
-    loadSnapshot,
     loadWeather,
     sendAction,
     controlMusic,

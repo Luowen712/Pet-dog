@@ -16,15 +16,9 @@
     .venv\\Scripts\\python.exe tools\\dev_devices.py release 1        # 按主键解绑
     .venv\\Scripts\\python.exe tools\\dev_devices.py release DEV-TEST-02
 
-配对码要从「可认领」状态才能发，所以 add 默认 handover=ready。
-真实流程里解绑后是 required，要等管理员走完交接才能再发码（06:296）。
+配对码流程已取消（改用低功耗蓝牙直连），本工具仅保留开发期造设备/查看/解绑还原。
 
-这是开发期工具，不是生产 CLI：
-    - 不拿 admin_lock（那会把正在跑的服务锁住）
-    - 不做交互式密码输入
-    - 上线前应连同 tools/sim_heartbeat.py 一起删掉
-
-删设备是禁止的：Telemetry / CommandLog / DeviceClaim 等 5 张表都以
+删设备是禁止的：Telemetry / CommandLog 等关联表均以
 ondelete=RESTRICT 引用 device.id，删一台设备必须先清掉它的历史。
 所以本工具只提供 release（解绑还原），不提供 delete。
 """
@@ -40,7 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from sqlalchemy import func
 
 from app.db import SessionLocal
-from app.models import Device, DeviceClaim, Telemetry
+from app.models import Device, Telemetry
 
 DEFAULT_PREFIX = "DEV-TEST-"
 DEFAULT_NAME = "测试桌宠"
@@ -85,7 +79,7 @@ def cmd_add(args) -> int:
             print("  pk=%-3d %-16s name=%s handover=%s"
                   % (row.id, row.device_id, row.name, row.handover_state))
         if args.handover != "ready":
-            print("\n注意：handover=%s 的设备发不出配对码，需先走完交接流程。" % args.handover)
+            print("\n注意：handover=%s，正式控制前需完成交接/恢复。" % args.handover)
         return 0
     finally:
         db.close()
@@ -115,13 +109,6 @@ def cmd_list(args) -> int:
         if counts:
             print("\n遥测条数：" + "  ".join("pk%s=%d" % (k, v) for k, v in sorted(counts.items())))
 
-        claims = db.query(DeviceClaim).all()
-        if claims:
-            print("配对码行：")
-            for c in claims:
-                state = "已用" if c.consumed_at else ("锁定" if c.locked_until else "未用")
-                print("  device_pk=%-3d attempts=%d %s expires=%s"
-                      % (c.device_pk, c.attempts, state, c.expires_at))
         return 0
     finally:
         db.close()
@@ -137,9 +124,9 @@ def _resolve(db, ref: str):
 
 
 def cmd_release(args) -> int:
-    """解绑还原：把设备退回「可认领」状态，方便反复测试认领流程。
+    """解绑还原：把设备退回可重新连接绑定状态，方便开发期反复测试。
 
-    这一步等价于真实的 DELETE /api/devices/{id}/binding（尚未实现）：
+    等价于 DELETE /api/devices/{id}/binding：
         owner 置空、status 回 claimable、be+1（隔断上一代遥测）、清 bound_at。
     be+1 是关键 —— 不 +1 的话下一个人会看到上一个人的电量（台账 S01）。
     """
@@ -155,14 +142,12 @@ def cmd_release(args) -> int:
         d.status = "claimable"
         d.be = d.be + 1
         d.bound_at = None
-        # 配对码行整行删掉：重新发码时会重建，留着会让 attempts 顺延
-        db.query(DeviceClaim).filter(DeviceClaim.device_pk == d.id).delete()
         db.commit()
 
         print("已解绑 pk=%d %s    be: %d → %d   handover=%s"
               % (d.id, d.device_id, old_be, d.be, d.handover_state))
         if d.handover_state != "ready":
-            print("handover=%s，发码会被拒；需要时用 -c 手工改回 ready" % d.handover_state)
+            print("handover=%s，正式控制前需完成交接/恢复" % d.handover_state)
         return 0
     finally:
         db.close()
@@ -180,13 +165,13 @@ def main() -> int:
     a.add_argument("--name", default=DEFAULT_NAME, help="设备名，默认「%s」" % DEFAULT_NAME)
     a.add_argument("--prefix", default=DEFAULT_PREFIX, help="编号前缀，默认 %s" % DEFAULT_PREFIX)
     a.add_argument("--handover", default="ready", choices=["ready", "required"],
-                   help="交接状态，默认 ready（可直接发配对码）")
+                   help="交接状态，默认 ready")
     a.set_defaults(func=cmd_add)
 
     b = sub.add_parser("list", help="列出所有设备")
     b.set_defaults(func=cmd_list)
 
-    c = sub.add_parser("release", help="解绑还原（owner 置空、be+1、清配对码）")
+    c = sub.add_parser("release", help="解绑还原（owner 置空、be+1）")
     c.add_argument("device", help="设备主键或设备编号")
     c.set_defaults(func=cmd_release)
 

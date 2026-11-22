@@ -72,6 +72,10 @@ class SendGate:
         self._listeners: list[RevokeListener] = []
         self._default_timeout = default_timeout
 
+    @property
+    def default_timeout(self) -> float:
+        return self._default_timeout
+
     @contextmanager
     def hold(self, timeout: float | None = None) -> Iterator[None]:
         """持锁执行需要与撤销互斥的临界区（例如设备写前置检查或归属提交）。"""
@@ -98,6 +102,17 @@ class SendGate:
 
         return _unregister
 
+    def notify_revoke(self, event: RevokeEvent) -> None:
+        """在 SendGate 释锁后广播撤销事件，监听器异常只记日志不反向影响已提交事务。"""
+        with self._listeners_mu:
+            listeners = list(self._listeners)
+        for listener in listeners:
+            try:
+                listener(event)
+            except Exception:
+                # DB 已经提交成功，监听器异常只记日志，绝不伪造「提交失败」
+                logger.exception("SendGate 撤销监听器执行异常: kind=%s", event.kind)
+
     def revoke_access(
         self,
         uid: int | None,
@@ -119,21 +134,15 @@ class SendGate:
         with self.hold(timeout=timeout):
             result = commit_fn()
 
-        event = RevokeEvent(
-            uid=uid,
-            device_pk=device_pk,
-            kind=kind,
-            new_tv=new_tv,
-            new_be=new_be,
+        self.notify_revoke(
+            RevokeEvent(
+                uid=uid,
+                device_pk=device_pk,
+                kind=kind,
+                new_tv=new_tv,
+                new_be=new_be,
+            )
         )
-        with self._listeners_mu:
-            listeners = list(self._listeners)
-        for listener in listeners:
-            try:
-                listener(event)
-            except Exception:
-                # DB 已经提交成功，监听器异常只记日志，绝不伪造「提交失败」
-                logger.exception("SendGate 撤销监听器执行异常: kind=%s", kind)
         return result
 
 

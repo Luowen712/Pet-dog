@@ -109,10 +109,24 @@ def open_port(
     write_timeout: float = DEFAULT_WRITE_TIMEOUT,
     sim_device: SimulatedDevice | None = None,
 ) -> BytePort:
-    """按端口字符串打开真串口、loop:// 或模拟器，对外返回同一协议对象。"""
+    """按端口字符串打开低功耗蓝牙 BLE、真串口、loop:// 或模拟器，对外返回同一协议对象。"""
     spec = port_spec.strip()
-    if spec.lower() == "sim":
-        return SimBytePort(sim_device if sim_device is not None else SimulatedDevice())
+    low = spec.lower()
+    if low == "sim":
+        return SimBytePort(sim_device if sim_device is not None else SimulatedDevice(periodic_status=True))
+    if low.startswith("ble://"):
+        from app.config import settings
+        from app.link.ble_link import BleBytePort
+
+        address = spec[6:].strip()
+        return BleBytePort(
+            address,
+            service_uuid=settings.BLE_SERVICE_UUID,
+            notify_uuid=settings.BLE_NOTIFY_UUID,
+            write_uuid=settings.BLE_WRITE_UUID,
+            mtu_chunk=settings.BLE_MTU_CHUNK,
+            write_timeout=write_timeout,
+        )
     if "://" in spec:
         return serial.serial_for_url(
             spec,
@@ -377,18 +391,72 @@ class SerialLink:
                 return
 
         # 4 & 5. 用户写受 SendGate 保护（06:189：动作与表情共用同一门禁，系统心跳/快照放行）
+        # 用 10ms 短超时轮询拿锁，间隙继续 _poll_read() 并复核 DB 锁与队列过期，
+        # 避免 SendGate 竞争期间阻塞收帧或在失锁后仍写出字节。
         gate = self._send_gate if item.require_send_gate else None
         if gate is not None:
-            try:
-                with gate.hold():
-                    self._execute_write(item)
-            except SendGateTimeout:
-                self._notify_write(
-                    item,
-                    WriteOutcome(
-                        transport=TRANSPORT_WRITE_FAILED, reason="send_gate_timeout"
-                    ),
-                )
+            deadline = self._clock.monotonic() + gate.default_timeout
+            retries = 0
+            while not self._stop_event.is_set() and not self._faulted:
+                self._poll_read()
+                if self._faulted or self._stop_event.is_set():
+                    self._notify_write(
+                        item,
+                        WriteOutcome(
+                            transport=TRANSPORT_WRITE_FAILED,
+                            reason=self._fault_reason or "link_closing",
+                        ),
+                    )
+                    return
+                if retries > 0 and self._lock_check is not None:
+                    try:
+                        held = bool(self._lock_check())
+                    except Exception:
+                        held = False
+                    if not held:
+                        self._notify_write(
+                            item,
+                            WriteOutcome(
+                                transport=TRANSPORT_WRITE_FAILED,
+                                reason="db_lock_lost",
+                            ),
+                        )
+                        self._trip_fault("db_lock_lost")
+                        return
+                now = self._clock.monotonic()
+                if (
+                    item.max_queue_wait is not None
+                    and (now - item.enqueued_at) > item.max_queue_wait
+                ):
+                    self._notify_write(
+                        item,
+                        WriteOutcome(
+                            transport=TRANSPORT_WRITE_FAILED, reason="queue_expired"
+                        ),
+                    )
+                    return
+                try:
+                    with gate.hold(timeout=0.01):
+                        self._execute_write(item)
+                        return
+                except SendGateTimeout:
+                    retries += 1
+                    if self._clock.monotonic() >= deadline:
+                        self._notify_write(
+                            item,
+                            WriteOutcome(
+                                transport=TRANSPORT_WRITE_FAILED,
+                                reason="send_gate_timeout",
+                            ),
+                        )
+                        return
+            self._notify_write(
+                item,
+                WriteOutcome(
+                    transport=TRANSPORT_WRITE_FAILED,
+                    reason=self._fault_reason or "link_closing",
+                ),
+            )
         else:
             self._execute_write(item)
 

@@ -19,17 +19,18 @@ const renameValue = ref('')
 const renameSaving = ref(false)
 let renameTarget: Device | null = null
 
-const claimTarget = ref<number | null>(null)
-const claimCode = ref('')
-const claiming = ref(false)
+const selectedAddress = ref<string | null>(null)
+const connecting = ref(false)
+const blePanelOpen = ref(false)
 
-const canClaim = computed(
-  () => claimTarget.value !== null && /^\d{6}$/.test(claimCode.value),
+const selectedBle = computed(
+  () => deviceStore.bleDevices.find((item) => item.address === selectedAddress.value) ?? null,
 )
+const showBlePanel = computed(() => deviceStore.devices.length === 0 || blePanelOpen.value)
 
 onMounted(async () => {
   if (!deviceStore.loaded) await deviceStore.load()
-  await deviceStore.loadClaimable()
+  if (deviceStore.devices.length === 0) await deviceStore.scanBle()
 })
 
 function enter(device: Device): void {
@@ -40,24 +41,35 @@ function enter(device: Device): void {
 
 function refresh(): void {
   void deviceStore.load()
-  void deviceStore.loadClaimable()
+  if (showBlePanel.value) void deviceStore.scanBle()
 }
 
-async function submitClaim(): Promise<void> {
-  if (!canClaim.value || claimTarget.value === null || claiming.value) return
-  claiming.value = true
+async function openBleReconnect(): Promise<void> {
+  blePanelOpen.value = true
+  selectedAddress.value = null
+  await deviceStore.scanBle()
+}
+
+async function scan(): Promise<void> {
+  selectedAddress.value = null
+  await deviceStore.scanBle()
+}
+
+async function connectSelected(): Promise<void> {
+  if (!selectedBle.value || connecting.value) return
+  const wasBound = !!selectedBle.value.bound_to_me
+  connecting.value = true
   try {
-    const device = await deviceStore.claim(claimTarget.value, claimCode.value)
-    claimCode.value = ''
-    claimTarget.value = null
-    await deviceStore.loadClaimable()
-    ElMessage.success(`已认领「${device.name}」`)
+    const device = await deviceStore.connectBle(selectedBle.value.address, selectedBle.value.name)
+    selectedAddress.value = null
+    blePanelOpen.value = false
+    ElMessage.success(wasBound ? `已重新连接「${device.name}」` : `已连接并绑定「${device.name}」`)
     pet.connect(device.id)
     await router.push('/console')
   } catch {
     // 错误提示由 request 层统一处理
   } finally {
-    claiming.value = false
+    connecting.value = false
   }
 }
 
@@ -94,7 +106,7 @@ async function submitRename(): Promise<void> {
 async function unbind(device: Device): Promise<void> {
   try {
     await ElMessageBox.confirm(
-      '解绑不是急停：已经发出去的动作可能还会继续执行。解绑后这台设备会进入待交接状态，需要重新用配对码认领。',
+      '解绑不是急停：已经发出去的动作可能还会继续执行。解绑后将断开蓝牙连接，可重新扫描低功耗蓝牙绑定。',
       `解绑「${device.name}」`,
       {
         type: 'warning',
@@ -107,9 +119,8 @@ async function unbind(device: Device): Promise<void> {
   }
 
   try {
-    pet.reset()
     await deviceStore.unbind(device.id)
-    await deviceStore.loadClaimable()
+    pet.reset()
     ElMessage.success('设备已解绑')
   } catch {
     // 错误提示由 request 层统一处理
@@ -117,6 +128,9 @@ async function unbind(device: Device): Promise<void> {
 }
 
 function stateText(device: Device): string {
+  const state = device.control_state
+  if (state === 'faulted') return 'Faulted'
+  if (state === 'handover_required') return 'Handover'
   if (!device.online) return 'Offline'
   const map: Record<string, string> = {
     ready: 'Ready',
@@ -127,7 +141,7 @@ function stateText(device: Device): string {
     unconfigured: 'Unconfigured',
     offline: 'Offline',
   }
-  return map[device.control_state] ?? device.control_state
+  return (state && map[state]) || state || 'Online'
 }
 </script>
 
@@ -146,106 +160,114 @@ function stateText(device: Device): string {
 
     <el-skeleton v-if="deviceStore.loading && !deviceStore.loaded" :rows="4" animated />
 
-    <template v-else-if="deviceStore.devices.length === 0">
-      <section class="card claim">
+    <template v-else>
+      <section v-if="showBlePanel" class="card claim">
         <div class="claim-head">
           <div>
-            <span class="claim-kicker mono">PAIR / 01</span>
-            <h3>还没有绑定设备</h3>
-            <p>输入 6 位配对码认领设备。配对码显示在桌宠屏幕上，认领后这台设备只属于当前账号。</p>
+            <span class="claim-kicker mono">BLE / ECB02H2</span>
+            <h3>{{ deviceStore.devices.length === 0 ? '连接低功耗蓝牙桌宠' : '扫描并重连低功耗蓝牙' }}</h3>
+            <p>扫描附近的低功耗蓝牙设备（ECB02H2），点选后直接建立连接并绑定到当前账号，无需配对码。</p>
           </div>
           <el-icon class="claim-icon"><Link /></el-icon>
         </div>
 
-        <div v-if="deviceStore.claimable.length > 0" class="claimable-list">
+        <div v-if="deviceStore.bleDevices.length > 0" class="claimable-list">
           <button
-            v-for="item in deviceStore.claimable"
-            :key="item.id"
+            v-for="item in deviceStore.bleDevices"
+            :key="item.address"
             type="button"
             class="claimable"
-            :class="{ active: claimTarget === item.id }"
-            @click="claimTarget = item.id"
+            :class="{ active: selectedAddress === item.address }"
+            @click="selectedAddress = item.address"
           >
-            <span class="mono device-id">ID {{ item.id }}</span>
+            <span class="mono device-id">
+              {{ item.transport.toUpperCase() }} · {{ item.address }}
+              <template v-if="item.rssi !== null"> · {{ item.rssi }} dBm</template>
+              <template v-if="item.bound_to_me"> · 已绑定</template>
+            </span>
             <span class="claimable-name">{{ item.name }}</span>
             <span class="claimable-dot" />
           </button>
         </div>
         <EmptyState
           v-else
-          title="暂无可认领设备"
-          hint="设备开机并显示配对码后，这里会出现可认领的桌宠"
+          title="暂未发现可用蓝牙设备"
+          hint="请确认桌宠已通电且 ECB02H2 处于可被扫描状态，点击下方按钮重新扫描"
         />
 
         <div class="claim-form">
-          <el-input
-            v-model="claimCode"
-            class="code-input"
-            maxlength="6"
-            inputmode="numeric"
-            placeholder="输入 6 位配对码"
-            @keyup.enter="submitClaim"
-          />
-          <el-button type="primary" :disabled="!canClaim" :loading="claiming" @click="submitClaim">
-            认领设备
+          <el-button class="ghost" :icon="Refresh" :loading="deviceStore.scanning" @click="scan">
+            扫描蓝牙
+          </el-button>
+          <el-button
+            type="primary"
+            :disabled="!selectedBle"
+            :loading="connecting"
+            @click="connectSelected"
+          >
+            {{ selectedBle?.bound_to_me ? '重新连接蓝牙' : '直接连接并绑定' }}
+          </el-button>
+          <el-button v-if="deviceStore.devices.length > 0" @click="blePanelOpen = false">
+            收起
           </el-button>
         </div>
-        <p v-if="claimTarget === null" class="claim-hint">先选择上方一台设备，再输入配对码。</p>
+        <p v-if="!selectedBle" class="claim-hint">先从上方扫描结果点选一台蓝牙设备，再点击连接。</p>
       </section>
+
+      <div v-if="deviceStore.devices.length > 0" class="grid">
+        <article
+          v-for="(device, index) in deviceStore.devices"
+          :key="device.id"
+          class="device card"
+          :class="{ offline: !device.online }"
+        >
+          <div class="top">
+            <span class="index mono">{{ String(index + 1).padStart(2, '0') }}</span>
+            <span class="status" :class="device.online ? 'ok' : ''">{{ stateText(device) }}</span>
+          </div>
+
+          <div class="name-row">
+            <h3 class="name" :title="device.name">{{ device.name }}</h3>
+            <PetCharm class="charm" :online="device.online" />
+            <button type="button" class="rename" title="修改桌宠名字" @click="openRename(device)">
+              <el-icon><EditPen /></el-icon>
+            </button>
+          </div>
+
+          <div class="meta">
+            <div class="meta-cell">
+              <span class="meta-label mono">Firmware</span>
+              <span class="meta-value mono">{{ device.firmware || '—' }}</span>
+            </div>
+            <div class="meta-cell">
+              <span class="meta-label mono">Battery</span>
+              <span class="meta-value mono">
+                {{ device.battery === null ? '—' : `${device.battery}%` }}
+              </span>
+            </div>
+            <div class="meta-cell">
+              <span class="meta-label mono">Control</span>
+              <span class="meta-value mono">{{ device.control_state }}</span>
+            </div>
+            <div class="meta-cell">
+              <span class="meta-label mono">Heartbeat</span>
+              <span class="meta-value">{{ formatRelative(device.last_heartbeat ?? undefined) }}</span>
+            </div>
+          </div>
+
+          <div class="foot">
+            <span class="heart mono">{{ formatDateTime(device.last_heartbeat ?? undefined) }}</span>
+            <div class="foot-actions">
+              <el-button class="ghost" :icon="Link" @click="openBleReconnect">重连蓝牙</el-button>
+              <el-button class="unbind" :icon="SwitchButton" @click="unbind(device)">解绑</el-button>
+              <el-button class="enter" @click="enter(device)">
+                进入控制台 <span class="arrow">↗</span>
+              </el-button>
+            </div>
+          </div>
+        </article>
+      </div>
     </template>
-
-    <div v-else class="grid">
-      <article
-        v-for="(device, index) in deviceStore.devices"
-        :key="device.id"
-        class="device card"
-        :class="{ offline: !device.online }"
-      >
-        <div class="top">
-          <span class="index mono">{{ String(index + 1).padStart(2, '0') }}</span>
-          <span class="status" :class="device.online ? 'ok' : ''">{{ stateText(device) }}</span>
-        </div>
-
-        <div class="name-row">
-          <h3 class="name" :title="device.name">{{ device.name }}</h3>
-          <PetCharm class="charm" :online="device.online" />
-          <button type="button" class="rename" title="修改桌宠名字" @click="openRename(device)">
-            <el-icon><EditPen /></el-icon>
-          </button>
-        </div>
-
-        <div class="meta">
-          <div class="meta-cell">
-            <span class="meta-label mono">Firmware</span>
-            <span class="meta-value mono">{{ device.firmware || '—' }}</span>
-          </div>
-          <div class="meta-cell">
-            <span class="meta-label mono">Battery</span>
-            <span class="meta-value mono">
-              {{ device.battery === null ? '—' : `${device.battery}%` }}
-            </span>
-          </div>
-          <div class="meta-cell">
-            <span class="meta-label mono">Control</span>
-            <span class="meta-value mono">{{ device.control_state }}</span>
-          </div>
-          <div class="meta-cell">
-            <span class="meta-label mono">Heartbeat</span>
-            <span class="meta-value">{{ formatRelative(device.last_heartbeat ?? undefined) }}</span>
-          </div>
-        </div>
-
-        <div class="foot">
-          <span class="heart mono">{{ formatDateTime(device.last_heartbeat ?? undefined) }}</span>
-          <div class="foot-actions">
-            <el-button class="unbind" :icon="SwitchButton" @click="unbind(device)">解绑</el-button>
-            <el-button class="enter" @click="enter(device)">
-              进入控制台 <span class="arrow">↗</span>
-            </el-button>
-          </div>
-        </div>
-      </article>
-    </div>
 
     <el-dialog v-model="renameVisible" title="修改桌宠名字" width="380px">
       <div class="rename-body">
@@ -544,11 +566,6 @@ function stateText(device: Device): string {
   gap: 10px;
   margin-top: 18px;
   max-width: 420px;
-}
-
-.code-input :deep(input) {
-  font-family: var(--mono);
-  letter-spacing: 0.3em;
 }
 
 .claim-hint {

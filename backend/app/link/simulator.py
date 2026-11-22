@@ -97,7 +97,7 @@ def decode_status(data: bytes) -> dict:
 
     out = {
         "battery": _opt(data[0]),
-        "action": data[1],  # 0 是空闲，不是未知
+        "action": _opt(data[1]),  # 0 是空闲；0xFF 是未知（06:230），避免误判 busy
         "face": _opt(data[2]),
         "music_state": _opt(data[3]),
         "track": _opt(data[4]),
@@ -122,10 +122,12 @@ class SimulatedDevice:
         clock: Clock | None = None,
         faults: SimFaults | None = None,
         status: bytes = DEFAULT_STATUS,
+        periodic_status: bool = False,
     ) -> None:
         self._clock: Clock = clock if clock is not None else _SystemClock()
         self._faults = faults if faults is not None else SimFaults()
         self._status = bytearray(status)
+        self._next_status = self._clock.monotonic() + 5 if periodic_status else None
         self._parser = Parser()
         self._out: list[tuple[float, bytes]] = []
         self._seq_results: dict[int, tuple[bytes, list[tuple[float, bytes]]]] = {}
@@ -159,6 +161,9 @@ class SimulatedDevice:
 
     def poll(self) -> list[bytes]:
         now = self._clock.monotonic()
+        if self._connected and self._next_status is not None and now >= self._next_status:
+            self._emit(now, build(CMD_STATUS, bytes(self._status)))
+            self._next_status = now + 5
         ready = sorted((item for item in self._out if item[0] <= now), key=lambda it: it[0])
         self._out = [item for item in self._out if item[0] > now]
         return [payload for _, payload in ready]
@@ -187,7 +192,7 @@ class SimulatedDevice:
         elif frame.cmd == CMD_POLL_STATUS:
             self._emit(now, build(CMD_STATUS, bytes(self._status)))
         elif frame.cmd == CMD_FACE:
-            if frame.data:
+            if len(frame.data) == 1 and 0 <= frame.data[0] <= 6:
                 self._status[2] = frame.data[0]
             else:
                 self.stats.malformed += 1

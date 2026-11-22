@@ -7,4 +7,5 @@ def is_online(last_seen: datetime | None, at: datetime | None = None) -> bool:
     if last_seen is None:
         return False
     at = at or datetime.now()
-    return at - last_seen <= timedelta(seconds=settings.ONLINE_TTL_SEC)
+    delta = at - last_seen
+    return timedelta(0) <= delta <= timedelta(seconds=settings.ONLINE_TTL_SEC)

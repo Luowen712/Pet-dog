@@ -137,9 +137,15 @@ def assert_single_process() -> None:
                 "请用单 worker 启动，或改成共享存储后再开多 worker。" % raw
             )
 
-    for flag in ("--workers", "-w"):
-        if flag in sys.argv:
-            raise RuntimeError(
-                "限流器是单进程内存计数器，%s 会让阈值失效。"
-                "请用单 worker 启动。" % flag
-            )
+    args = iter(sys.argv[1:])
+    for arg in args:
+        if arg in ('--workers', '-w'):
+            value = next(args, '')
+        elif arg.startswith('--workers='):
+            value = arg.partition('=')[2]
+        elif arg.startswith('-w') and arg[2:].isdigit():
+            value = arg[2:]
+        else:
+            continue
+        if value != '1':
+            raise RuntimeError(f'限流器要求单 worker，收到 {arg} (workers={value})。')

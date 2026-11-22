@@ -28,7 +28,16 @@ watch(
   },
 )
 
-const showOffline = computed(() => pet.socketStatus === 'closed' && everConnected.value)
+watch(
+  () => deviceStore.currentId,
+  (id) => {
+    if (!id) everConnected.value = false
+  },
+)
+
+const showOffline = computed(
+  () => deviceStore.currentId > 0 && pet.socketStatus === 'closed' && everConnected.value,
+)
 const pageTitle = computed(() => (typeof route.meta.title === 'string' ? route.meta.title : '控制台'))
 const initial = computed(() => auth.user?.name?.slice(0, 1) ?? 'A')
 
@@ -52,6 +61,7 @@ onBeforeUnmount(() => {
 })
 
 function onDeviceChange(value: number): void {
+  everConnected.value = false
   deviceStore.select(value)
   pet.connect(value)
 }
@@ -79,8 +89,10 @@ async function submitSwitch(): Promise<void> {
   switchLoading.value = true
   try {
     // 直接换新 token，不需要先调 logout；旧账号在其它设备上的登录不受影响
+    const prevUid = auth.uid
     await auth.login(username, switchForm.password)
-    pet.reset()
+    everConnected.value = false
+    pet.reset(prevUid)
     deviceStore.reset()
     if (auth.uid) {
       deviceStore.bindUser(auth.uid)

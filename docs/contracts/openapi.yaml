@@ -41,7 +41,7 @@ paths:
       operationId: registerUser
       security: []
       x-impl-status: partial
-      x-impl-gap: backend/app/routers/auth.py 的 user_out 不返回 id，name 用 username 冒充；密码哈希与强度未按 02:227 收敛
+      x-impl-gap: 无单独昵称列，name 返回 username
       x-business-errors: [40002, 40900]
       requestBody:
         required: true
@@ -66,7 +66,7 @@ paths:
       operationId: login
       security: []
       x-impl-status: partial
-      x-impl-gap: token 未携带 tv；User 缺 id；失败返回 HTTP200+40001 而 06:19 只定义了 401+40101
+      x-impl-gap: 登录失败返回 HTTP200+40001，失败信封待 Q1 裁决
       requestBody:
         required: true
         content:
@@ -86,8 +86,7 @@ paths:
       tags: [认证]
       summary: 当前登录者
       operationId: getMe
-      x-impl-status: partial
-      x-impl-gap: 未校验 tv 与账号状态；User 缺 id
+      x-impl-status: implemented
       responses:
         '200':
           $ref: '#/components/responses/UserResponse'
@@ -141,7 +140,7 @@ paths:
       summary: 注销账号
       description: |
         请求体放在 DELETE 上，字段见 06:70。立即撤权，返回 revoking，清理最终转 revoked。
-        注销同事务内 tv+1 与解绑同时发生，在途连接按关闭码 1004 处理（06:157）。
+        注销同事务内 tv+1 与解绑同时发生，在途连接按关闭码 4401 处理（06:157）。
       operationId: deleteAccount
       x-impl-status: implemented
       x-business-errors: [40002, 40101, 40900]
@@ -182,8 +181,7 @@ paths:
       description: |
         只含本人设备，允许空数组（06:72）。
       operationId: listDevices
-      x-impl-status: partial
-      x-impl-gap: battery 缺失时回填 0 而不是 null；Device 缺 binding_state/control_state/supported_actions
+      x-impl-status: implemented
       responses:
         '200':
           $ref: '#/components/responses/DeviceListResponse'
@@ -222,47 +220,49 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
-  /api/devices/claimable:
+  /api/devices/ble/scan:
     get:
       tags: [设备]
-      summary: 可认领设备
+      summary: 扫描附近低功耗蓝牙设备
       description: |
-        只返回可认领且已完成交接的设备，字段仅 id 与 name，不含 owner（06:76）。
-        路由顺序：本路径必须在 /api/devices/{id} 之前注册，或把 {id} 显式限定为数字类型，
-        否则集合路径会被 {id} 吞掉（06:87）。
-      operationId: listClaimableDevices
-      x-impl-status: not-implemented
+        后端扫描附近低功耗蓝牙外设（ECB02H2，SIM 模式下返回模拟候选），过滤掉已停用或已绑定他人的设备，不含他人 owner（06:76、第12.7节）。
+        路由顺序：本路径必须在 /api/devices/{id} 之前注册，或把 {id} 显式限定为数字类型（06:87）。
+      operationId: scanBleDevices
+      x-impl-status: partial
+      x-impl-gap: SIM 与 BLE 适配器单测已通；ECB02H2 实板扫描与连接待硬件实测
+      x-business-errors: [40900]
       responses:
         '200':
-          $ref: '#/components/responses/ClaimableListResponse'
+          $ref: '#/components/responses/BleDeviceListResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
         '500':
           $ref: '#/components/responses/InternalError'
 
-  /api/devices/claim:
+  /api/devices/ble/connect:
     post:
       tags: [设备]
-      summary: 用配对码认领设备
+      summary: 低功耗蓝牙直连并绑定设备
       description: |
-        事务消费配对码（06:77）。每账号至多一台设备，冲突为 40900。
-        业务错误（HTTP200）：40002 码格式不合法，40400 设备不可见，40900 已被占用或码无效。
-      operationId: claimDevice
-      x-impl-status: not-implemented
-      x-business-errors: [40002, 40400, 40900]
+        取消 6 位配对码后，前端点选扫描到的低功耗蓝牙设备直接建连并绑定当前账号（06:77、第12.7节）。
+        每账号至多一台设备；业务错误（HTTP200）：40002 地址/名称非法，40900 蓝牙连接失败或设备/账号已被占用。
+      operationId: connectBleDevice
+      x-impl-status: partial
+      x-impl-gap: SIM 与 BLE 适配器单测已通；ECB02H2 实板建连待硬件实测
+      x-business-errors: [40002, 40900]
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ClaimRequest'
+              $ref: '#/components/schemas/BleConnectRequest'
       responses:
         '200':
           $ref: '#/components/responses/DeviceResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
-        '429':
-          $ref: '#/components/responses/TooManyRequests'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -273,8 +273,7 @@ paths:
       tags: [设备]
       summary: 单台设备
       operationId: getDevice
-      x-impl-status: partial
-      x-impl-gap: Device 缺 binding_state/control_state/supported_actions；battery 缺失时回填 0 而不是 null
+      x-impl-status: implemented
       x-business-errors: [40400]
       responses:
         '200':
@@ -289,8 +288,7 @@ paths:
       description: |
         name 为 1～64 字符；保留已有 renameDevice 调用（06:74）。
       operationId: renameDevice
-      x-impl-status: partial
-      x-impl-gap: name 上限 20 字符，契约要求 1～64（backend/app/routers/devices.py 与 frontend/src/views/DeviceList.vue 都还卡 20）
+      x-impl-status: implemented
       x-business-errors: [40002, 40400]
       requestBody:
         required: true
@@ -315,8 +313,7 @@ paths:
       description: |
         未知业务字段返回 null，不回填 0（06:40、06:44）。
       operationId: getDeviceStatus
-      x-impl-status: partial
-      x-impl-gap: 缺 online/control_state/session_id/state_revision；battery/action 等未知业务字段回填 0 而不是 null
+      x-impl-status: implemented
       x-business-errors: [40400]
       responses:
         '200':
@@ -361,7 +358,8 @@ paths:
         同键异体返回 40900 idempotency_conflict。没有创建命令的 busy/offline/unsupported 不占 key（06:94）。
         业务错误（HTTP200）：40002 值非法或动作未启用，40400 设备不可见，40900 冲突或忙。
       operationId: sendCommand
-      x-impl-status: not-implemented
+      x-impl-status: partial
+      x-impl-gap: 模拟器已验证；实板动作时序未验收，真机能力列表不开放
       x-business-errors: [40002, 40400, 40900]
       parameters:
         - name: Idempotency-Key
@@ -402,7 +400,7 @@ paths:
       description: |
         按 actor/owner/be 过滤（06:80）。HTTP 40400 表示不可查询，不等于 done（06:140）。
       operationId: getCommand
-      x-impl-status: not-implemented
+      x-impl-status: implemented
       x-business-errors: [40400]
       responses:
         '200':
@@ -419,7 +417,7 @@ paths:
       description: |
         ticket 绑定 uid/tv/device/be，30 秒一次性（06:144）。JWT 不得进 URL（06:82）。
       operationId: issueTicket
-      x-impl-status: not-implemented
+      x-impl-status: implemented
       x-business-errors: [40002, 40400]
       requestBody:
         required: true
@@ -464,7 +462,7 @@ paths:
       description: |
         仅入队，不代表设备已经显示（06:84）。
       operationId: setCurrentFace
-      x-impl-status: not-implemented
+      x-impl-status: implemented
       x-business-errors: [40002, 40400, 40900]
       requestBody:
         required: true
@@ -488,8 +486,7 @@ paths:
         mode 来自配置而不是写死（02:290）；不含 COM 口与秘密（06:85）。
       operationId: getHealth
       security: []
-      x-impl-status: partial
-      x-impl-gap: backend/app/main.py 把 mode 硬编码为 serial，且不返回 protocol_version
+      x-impl-status: implemented
       responses:
         '200':
           $ref: '#/components/responses/HealthResponse'
@@ -664,8 +661,8 @@ components:
                     enum: [0]
                   data:
                     $ref: '#/components/schemas/DeviceList'
-    ClaimableListResponse:
-      description: 可认领设备数组
+    BleDeviceListResponse:
+      description: 扫描到的低功耗蓝牙设备数组
       content:
         application/json:
           schema:
@@ -678,7 +675,7 @@ components:
                     type: integer
                     enum: [0]
                   data:
-                    $ref: '#/components/schemas/ClaimableList'
+                    $ref: '#/components/schemas/BleDeviceList'
     HeartbeatResponse:
       description: 假心跳回执
       content:
@@ -991,20 +988,28 @@ components:
       items:
         $ref: '#/components/schemas/Device'
 
-    ClaimableDevice:
+    BleDevice:
       type: object
-      description: 不含 owner 字段
-      required: [id, name]
+      description: 扫描到的附近低功耗蓝牙外设；不含他人 owner 字段
+      required: [address, name, rssi, transport]
       properties:
-        id:
-          type: integer
+        address:
+          type: string
         name:
           type: string
+        rssi:
+          type: integer
+          nullable: true
+        transport:
+          type: string
+          enum: [ble, sim]
+        bound_to_me:
+          type: boolean
 
-    ClaimableList:
+    BleDeviceList:
       type: array
       items:
-        $ref: '#/components/schemas/ClaimableDevice'
+        $ref: '#/components/schemas/BleDevice'
 
     DeviceStatus:
       type: object
@@ -1056,6 +1061,7 @@ components:
           description: 单位摄氏度
         updated_at:
           type: string
+          nullable: true
           format: date-time
 
     CommandReceipt:
@@ -1153,7 +1159,7 @@ components:
           type: string
         mode:
           type: string
-          enum: [sim, serial]
+          enum: [sim, ble, serial]
         protocol_version:
           type: string
 
@@ -1219,17 +1225,20 @@ components:
           minLength: 1
           maxLength: 64
 
-    ClaimRequest:
+    BleConnectRequest:
       type: object
-      required: [device_id, code]
+      required: [address]
       properties:
-        device_id:
-          type: integer
-        code:
+        address:
           type: string
-          minLength: 6
-          maxLength: 6
-          description: 6 位配对码；仅明文输出一次
+          minLength: 1
+          maxLength: 32
+          description: BLE 扫描返回的设备地址（Windows 下为 MAC 地址，SIM 下为模拟地址）
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: 可选，首次绑定时的默认设备名
 
     BindingDeleteRequest:
       type: object
@@ -1288,7 +1297,7 @@ components:
         '1001':
           type: string
           enum: [服务端重启或进程内非预期异常]
-        '1004':
+        '4401':
           type: string
           enum: [身份失效]
         '1008':

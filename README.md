@@ -25,7 +25,20 @@ J00已按共享规则把机器契约落到 [docs/contracts](docs/contracts/READM
 | Node.js | 26.12.1 | 前端 |
 | pnpm | 12.18.0 | 仓库锁文件是 `frontend/pnpm-lock.yaml`，请用 pnpm 而非 npm 安装 |
 
-## 首次启动 · 后端
+## 本机联调（Windows，无需更改原库）
+
+先按下方步骤安装 Python 依赖。已安装 MySQL Server 8.0 的机器，可从仓库根运行：
+
+~~~powershell
+cd backend
+.\.venv\Scripts\python.exe run_sim.py
+~~~
+
+另开终端在 frontend 下运行 pnpm dev。浏览器访问 http://127.0.0.1:5173 ，使用账号 simulator；随机密码仅在本机 %LOCALAPPDATA%\PetDog\sim-v1\login.txt。模拟库、密钥均在该用户目录，不使用正式库或 pytest 库。后端只监听 127.0.0.1:8000，独立 MySQL 监听 127.0.0.1:33317；若端口占用，不抢占进程。前台 Ctrl+C 或另开终端在 backend 下运行 .\.venv\Scripts\python.exe run_sim.py --stop 即可正常停止。再次启动保留本机演示数据。
+
+这里走真实 HTTP、WebSocket、数据库及帧解析器，只替换设备端。loop:// 仅回显字节，不产生设备 ACK；纯前端 Mock 不验证这些链路。
+
+## 首次启动 · 后端（指定 MySQL）
 
 ### 1. 建库建账号（用 root 执行一次）
 
@@ -55,22 +68,25 @@ python -m venv .venv
 
 `requirements.txt` 是运行时依赖，`requirements-dev.txt` 额外带 pytest 与 httpx。**版本全部固定**，不要顺手升级。
 
-### 3. 建表
+### 3. 配置与迁移
 
-```powershell
-.\.venv\Scripts\python.exe -m alembic upgrade head
-```
+在 backend 下复制 .env.example 为 .env，已有配置请保留。填写 DB_URL，并生成至少 32 字符的随机值作为 JWT_SECRET（已取消配对码与 CLAIM_SECRET）。低功耗蓝牙（ECB02H2）联调设 SERIAL_PORT=ble（前端直接扫描点选连接，默认 GATT UUID 为 FFF0/FFF1/FFF2，可按实际模块批次覆写）；无板软件联调设 SERIAL_PORT=sim；有线串口固定多设备时设置 SERIAL_DEVICE_PK。
 
-建表由 Alembic 迁移负责，`main.py` 与 `seed.py` 里的 `Base.metadata.create_all` 已删除。新增表结构一律写 `backend/alembic/versions/` 下的迁移脚本，不手改数据库。
-（`backend/tests/conftest.py` 仍用 `drop_all` + `create_all` 重建测试库的沙地，那是测试专用，不是建表途径。）
+~~~powershell
+.\.venv\Scripts\python.exe -c "import secrets; print(secrets.token_hex(32))"
+.\.venv\Scripts\python.exe -m alembic current
+.\.venv\Scripts\python.exe -m alembic heads
+~~~
 
-### 4. 造管理员
+全新空库可直接运行 alembic upgrade head。有数据的旧库先停写、备份并验证可还原，在副本上检查重复 owner_id、逐版迁移并对比账号、设备、遥测及命令行数；确认归属策略后再操作原库。0007/0008 要求一个账号最多一台；不要自动解绑、删除设备或用 stamp head 跳过迁移。0010 为命令幂等键增加唯一约束；0011 随取消配对码删除 device_claim 表；有重复历史 key 时需先人工核对。
 
-```powershell
-.\.venv\Scripts\python.exe seed.py
-```
+### 4. 建管理员（应用停机时）
 
-幂等：已有 admin 就跳过。产出账号 `admin` / `admin123`，与登录页「一键填入」填的值一致。
+~~~powershell
+.\.venv\Scripts\python.exe cli.py create-admin myadmin
+~~~
+
+按提示设置密码，不使用演示种子的固定凭据。
 
 ### 5. 起服务
 
@@ -80,7 +96,7 @@ python -m venv .venv
 
 - 接口文档：<http://127.0.0.1:8000/docs>（本地 swagger-ui，不依赖外网）
 - 健康检查：<http://127.0.0.1:8000/api/health>
-- `run.py` 带 `reload=True`，改代码自动重启
+- 默认不开热重载，单 worker；只在开发调试时显式设 `PETDOG_RELOAD=1`。
 
 > **所有后端命令都要在 `backend/` 目录下执行**。`app` 是包内相对导入，从仓库根直接 `python -c "import app"` 会报 `ModuleNotFoundError: No module named 'app'`；`backend/.env` 也是按当前工作目录找的，目录不对会静默读不到。
 
@@ -124,17 +140,9 @@ pnpm dev
 | docs/evidence/ | 按任务ID归档的验收证据（如 BB00 隔离测试环境） |
 | docs/archive/ | 历史计划/契约/研究参考，不作为施工指令 |
 
-## 当前实现进度（2026-11-14）
+## 已接通的核心链路
 
-| 端 | 状态 |
-|---|---|
-| 后端 HTTP | 契约 20 条路径 / 21 个操作中已实现 13 条路径（14 个操作）：认证 6（注册/登录/登出/资料/改密/注销）、设备 4（列表、详情+改名、状态、假心跳）、表情列表、运维状态、health |
-| 契约外接口 | `POST /api/devices/{id}/music` 代码已实现但 `openapi.yaml` 未收录，需补进 06 与契约或下线，否则校验脚本发现不了这类反向偏差 |
-| 后端缺 | `/api/devices/claimable`、`/api/devices/claim`、`/api/devices/{id}/binding`、`/api/commands/send`、`/api/commands/{id}`、`/api/events/ticket`、`/api/faces/current` |
-| WebSocket | `/ws/device` 未实现（前端 `ws.ts` 已在请求 `/api/events/ticket`） |
-| 数据库 | 六表 + `alembic_version`，基线迁移 `0001` 已 stamp；归属约束、设备认领等表尚未建 |
-| 固件 / 硬件 | 仅占位，EA/EB 任务未开工 |
-| 前端 | 7 个页面可构建可测试（`pnpm build`、`pnpm test` 均通过），数据源已切到真实接口 |
+真实后端支持认证、低功耗蓝牙（ECB02H2）扫描直连与归属管理（取消 6 位配对码）、设备状态、内置表情设置、命令提交与对账、一次性 WS 票据和事件推送。动作的受理和完成是不同的回执；结果不明不自动重发。真机动作只有取得板上时序证据后才应加入允许列表。本期不提供音乐、天气、日志看板和场景扩展接口。
 
 带 `DEV_HEARTBEAT` 的假心跳（`POST /api/devices/heartbeat` + `backend/tools/sim_heartbeat.py`）只用于开发期让设备显示在线，它由 `backend/.env` 的 `DEV_HEARTBEAT=True` 打开，默认为关；真实心跳打通后连同脚本一起删除（见 plan/06 §11）。
 
@@ -150,15 +158,15 @@ main保持可演示版本，dev用于集成，个人功能分支合入前由接�
 | 现象 | 原因与处理 |
 |---|---|
 | `ModuleNotFoundError: No module named 'app'` | 不在 `backend/` 目录下执行。先 `cd backend` |
-| `Table 'pet_dog.user' doesn't exist`（错误码 1146） | 没跑迁移。先 `alembic upgrade head`，再 `seed.py` |
-| 迁移报 `Table 'xxx' already exists`（1050） | 该库已有表但没有版本号。旧库用 `alembic stamp head` 盖章，不要 `upgrade` |
-| `Target database is not up to date` | `versions/` 里有库中未执行的迁移，先 `alembic upgrade head` |
-| 启动成功但接口报 `Can't connect to MySQL server` | MySQL 服务没起。建表已交给迁移，所以进程能起来，但任何查库的接口都会失败 |
+| 缺表或版本不匹配 | 核对实际库名、current 与 heads。区分空库初始化和旧库迁移，见上。 |
+| 迁移报已有表（1050） | 停止迁移，核对备份与实际 schema；不要直接 stamp head。 |
+| 版本落后 | 先在副本演练并验数，再安排停机迁移。 |
+| 无法连接 MySQL | 检查 MySQL 监听、连接串和账号授权；拿不到实例锁时后端应拒绝启动。 |
 | 终端中文乱码 | PowerShell 执行 `chcp 65001`；mysql 客户端加 `--default-character-set=utf8mb4` |
 | 改了 `backend/app/models.py` 但表没变 | 迁移不会自动生成。`alembic revision --autogenerate -m "说明"` 生成草稿后**逐行核对**再 `upgrade` |
 
 `backend/.env`（本机密钥与开关）与 `frontend/.env.local` 都不进仓库，见 `.gitignore`；`frontend/.env.development` / `.env.production` / `.env.test` 三份是进仓库的公共配置。
-`JWT_SECRET` 的默认值只是占位，部署前必须在 `backend/.env` 里换掉。`backend/.env` 里的键名与 `backend/app/config.py` 的字段同名（如 `DEV_HEARTBEAT=True`）。
+`JWT_SECRET` 没有可用默认值。不要把密钥、数据库连接串或 SIM 登录文件提交到仓库。
 
 ## 许可证
 

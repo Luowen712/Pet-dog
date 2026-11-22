@@ -25,9 +25,11 @@ def _cfg() -> Config:
 
 
 def _wipe() -> None:
-    Base.metadata.drop_all(bind=engine)
     with engine.begin() as conn:
-        conn.execute(text("DROP TABLE IF EXISTS alembic_version"))
+        conn.execute(text("SET FOREIGN_KEY_CHECKS = 0"))
+        for tbl in inspect(conn).get_table_names():
+            conn.execute(text(f"DROP TABLE IF EXISTS `{tbl}`"))
+        conn.execute(text("SET FOREIGN_KEY_CHECKS = 1"))
 
 
 def _diff() -> list:

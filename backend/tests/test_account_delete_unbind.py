@@ -98,11 +98,12 @@ def test_delete_account_unbinds_device_and_passes_check():
         assert d.status == "claimable", "注销后设备必须回到可被认领状态"
         assert d.handover_state == "required"
         assert d.bound_at is None
-        # be 不在这里 +1：它属于下一次绑定的语义，下次被认领时才递增
-        assert d.be == 1
+        # 与 DELETE /devices/{id}/binding 同一口径（06:296 / S01）：注销解绑同步 be+1
+        assert d.be == 2
 
         u = db.query(User).filter(User.id == uid).first()
         assert u.status == "revoking"
+        assert u.deleted_at is not None
         assert u.username.startswith("~del~"), "用户名必须被改写成 ~del~ 前缀"
 
         _cleanup(db)

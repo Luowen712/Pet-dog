@@ -94,6 +94,15 @@ def test_poll_status_returns_current_nine_bytes():
     assert dev.poll() == [STATUS_CORE9]
 
 
+def test_runtime_sim_reports_actual_face_periodically():
+    clock = FakeClock()
+    dev = SimulatedDevice(clock=clock, periodic_status=True)
+    dev.feed(bytes.fromhex('AA 55 01 07 01 F6'))
+    assert not dev.poll()
+    clock.advance(5)
+    assert dev.poll() == [bytes.fromhex('AA 55 09 03 57 00 01 FF FF 1C FE FF 14 70')]
+
+
 def test_face_updates_status_and_answers_nothing():
     dev, _ = sim()
     dev.feed(FACE_HAPPY)

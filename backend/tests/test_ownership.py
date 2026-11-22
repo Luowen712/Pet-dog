@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.db import SessionLocal
 from app.main import app
-from app.models import Device, DeviceClaim, Telemetry, User
+from app.models import Device, Telemetry, User
 from app.security import make_token
 from app.services.ownership import (
     battery_of,
@@ -106,53 +106,6 @@ def _token_for(db, username: str) -> tuple[User, str]:
     return u, make_token(u.id, u.username, u.token_version)
 
 
-def test_claimable_lists_ready_unowned_device():
-    db = SessionLocal()
-    try:
-        _, token = _token_for(db, "cl_ready")
-        d = _mk_device(db, "CL-READY", be=0)  # 无主 + claimable + ready
-        r = client.get(
-            "/api/devices/claimable", headers={"Authorization": f"Bearer {token}"}
-        )
-        assert r.status_code == 200
-        ids = {x["id"] for x in r.json()["data"]}
-        assert d.id in ids
-        # 字段只有 id 和 name，别把 owner 带出来
-        assert set(r.json()["data"][0].keys()) <= {"id", "name"}
-    finally:
-        db.close()
-
-
-def test_claimable_excludes_handover_required():
-    db = SessionLocal()
-    try:
-        _, token = _token_for(db, "cl_req")
-        d = _mk_device(db, "CL-REQ", be=0)
-        d.handover_state = "required"
-        db.commit()
-        r = client.get(
-            "/api/devices/claimable", headers={"Authorization": f"Bearer {token}"}
-        )
-        ids = {x["id"] for x in r.json()["data"]}
-        assert d.id not in ids
-    finally:
-        db.close()
-
-
-def test_claimable_excludes_bound_device():
-    db = SessionLocal()
-    try:
-        u, token = _token_for(db, "cl_bound")
-        d = _mk_device(db, "CL-BOUND", owner_id=u.id)  # status=bound
-        r = client.get(
-            "/api/devices/claimable", headers={"Authorization": f"Bearer {token}"}
-        )
-        ids = {x["id"] for x in r.json()["data"]}
-        assert d.id not in ids
-    finally:
-        db.close()
-
-
 # ---------------- BB03 第 5 条：解绑即撤权 ----------------
 #
 # 下面四个用例都走真实 HTTP，不用 client.delete()：旧版 httpx 的
@@ -169,19 +122,12 @@ def _unbind(token: str, pk: int, confirm: int):
 
 
 def test_unbind_clears_five_columns_and_bumps_epoch():
-    """解绑必须一次改五列 + be+1 + 作废旧配对码，缺一列就违反 CHECK。"""
+    """解绑必须一次改五列 + be+1，缺一列就违反 CHECK。"""
     db = SessionLocal()
     pk = None
     try:
         u, token = _token_for(db, "ub_ok")
         d = _mk_device(db, "UB-OK", owner_id=u.id, be=0)
-        db.add(
-            DeviceClaim(
-                device_pk=d.id,
-                code_hash="h" * 64,
-                expires_at=datetime.now() + timedelta(minutes=10),
-            )
-        )
         db.commit()
         pk = d.id
 
@@ -200,12 +146,9 @@ def test_unbind_clears_five_columns_and_bumps_epoch():
         d = db2.query(Device).filter(Device.id == pk).first()
         assert d.owner_id is None, "owner 没清"
         assert d.status == "claimable", "status 没回落，CHECK 迟早报 3819"
-        assert d.handover_state == "required", "交接门槛没设，设备会被直接认领走"
+        assert d.handover_state == "required", "交接门槛没设"
         assert d.bound_at is None, "绑定时间还留着上一任的"
         assert d.be == 1, "绑定纪元没 +1，新主人会读到上一任的遥测"
-
-        left = db2.query(DeviceClaim).filter(DeviceClaim.device_pk == pk).count()
-        assert left == 0, "旧配对码没作废"
     finally:
         db2.close()
 

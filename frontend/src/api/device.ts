@@ -1,5 +1,5 @@
 import { request } from '@/utils/request'
-import type { ClaimableDevice, Device, DeviceStatus } from '@/types'
+import type { BleDevice, Device, DeviceStatus } from '@/types'
 
 export function listDevices(): Promise<Device[]> {
   return request<Device[]>({ url: '/devices' })
@@ -21,15 +21,15 @@ export function getDeviceStatus(id: number): Promise<DeviceStatus> {
   return request<DeviceStatus>({ url: `/devices/${id}/status` })
 }
 
-export function listClaimableDevices(): Promise<ClaimableDevice[]> {
-  return request<ClaimableDevice[]>({ url: '/devices/claimable' })
+export function scanBleDevices(): Promise<BleDevice[]> {
+  return request<BleDevice[]>({ url: '/devices/ble/scan' })
 }
 
-export function claimDevice(deviceId: number, code: string): Promise<Device> {
+export function connectBleDevice(address: string, name?: string): Promise<Device> {
   return request<Device>({
-    url: '/devices/claim',
+    url: '/devices/ble/connect',
     method: 'post',
-    data: { device_id: deviceId, code },
+    data: { address, ...(name ? { name } : {}) },
   })
 }
 

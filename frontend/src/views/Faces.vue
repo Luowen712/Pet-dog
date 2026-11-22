@@ -50,6 +50,7 @@ onMounted(() => {
           type="button"
           class="face-card"
           :class="{ active: pet.face === face.id }"
+          :disabled="!pet.connected || !pet.online || !['ready', 'busy'].includes(pet.controlState)"
           @click="pet.changeFace(face.id)"
         >
           <FaceTile :face="face.id" />

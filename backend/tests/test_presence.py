@@ -26,11 +26,7 @@ def test_exactly_30s_ago_is_still_online():
     assert is_online(now - timedelta(seconds=30), at=now) is True
 
 
-def test_future_timestamp_counts_as_online():
-    """设备时钟比服务器快时会怎样？负数差值 -> 永远在线。
-
-    这条不是在说这个行为是对的，而是先把现状钉住：
-    哪天有人修了这个缺陷，这条测试会变红，提醒改成 is False。
-    """
+def test_future_timestamp_counts_as_offline():
+    """设备时钟比服务器快（未来时间戳）不能被判为永久在线，应返回 False。"""
     now = datetime.now()
-    assert is_online(now + timedelta(seconds=60), at=now) is True
+    assert is_online(now + timedelta(seconds=60), at=now) is False

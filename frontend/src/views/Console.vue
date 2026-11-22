@@ -21,7 +21,8 @@ const heartbeat = computed(() =>
 )
 
 function isEnabled(code: number): boolean {
-  return ENABLED_ACTIONS.has(code)
+  return pet.connected && pet.online && pet.controlState === 'ready' &&
+    ENABLED_ACTIONS.has(code) && !!deviceStore.current?.supported_actions.includes(code)
 }
 
 function stateOf(code: number): ButtonState {
@@ -50,9 +51,9 @@ function stateOf(code: number): ButtonState {
       <div class="no-device-body">
         <span class="mono kicker">NO DEVICE</span>
         <h3>还没有绑定设备</h3>
-        <p>先到设备页输入 6 位配对码认领一台桌宠，控制台才会连上实时通道。</p>
+        <p>先到设备页扫描并直接连接低功耗蓝牙桌宠，控制台才会连上实时通道。</p>
         <router-link to="/devices">
-          <el-button type="primary">去认领设备</el-button>
+          <el-button type="primary">去连接蓝牙设备</el-button>
         </router-link>
       </div>
     </section>
@@ -63,7 +64,7 @@ function stateOf(code: number): ButtonState {
         <section class="card">
           <div class="card-head">
             <span class="card-title">动作指令</span>
-            <span class="card-meta">7 enabled · 其余本期禁用</span>
+            <span class="card-meta">{{ deviceStore.current.supported_actions.filter(isEnabled).length }} 个可用动作</span>
           </div>
           <div class="actions">
             <div v-for="(group, index) in ACTION_GROUPS" :key="group" class="group">
@@ -98,6 +99,7 @@ function stateOf(code: number): ButtonState {
               type="button"
               class="face-btn"
               :class="{ active: pet.face === face.id }"
+              :disabled="!pet.connected || !pet.online || !['ready', 'busy'].includes(pet.controlState)"
               @click="pet.changeFace(face.id)"
             >
               <FaceTile :face="face.id" />
@@ -123,7 +125,7 @@ function stateOf(code: number): ButtonState {
             </div>
             <div class="meta-row">
               <span class="mono">Control</span>
-              <span class="mono">{{ deviceStore.current?.control_state ?? '--' }}</span>
+              <span class="mono">{{ pet.controlState }}</span>
             </div>
             <div class="meta-row">
               <span class="mono">Heartbeat</span>

@@ -1,0 +1,22 @@
+{
+  "id": "http.devices.ble.scan.200",
+  "method": "GET",
+  "path": "/api/devices/ble/scan",
+  "http_status": 200,
+  "rule": "06:76 与第12.7节：返回附近可用低功耗蓝牙外设，过滤归属他人的设备，不含他人 owner",
+  "response": "BleDeviceListResponse",
+  "body": {
+    "code": 0,
+    "message": "ok",
+    "timestamp": 1731210000000,
+    "data": [
+      {
+        "address": "AA:BB:CC:DD:EE:01",
+        "name": "ECB02H2-PetDog",
+        "rssi": -54,
+        "transport": "ble",
+        "bound_to_me": false
+      }
+    ]
+  }
+}

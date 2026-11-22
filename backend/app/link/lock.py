@@ -74,6 +74,22 @@ class ProcessLock:
             conn = None
             try:
                 conn = engine.connect()
+                # 06:199 单写者 mysqld 校验：只读副本或组复制不允许持有唯一实例锁
+                for var in ("super_read_only", "read_only"):
+                    row = conn.execute(
+                        text(f"SHOW VARIABLES LIKE '{var}'")
+                    ).fetchone()
+                    if row and str(row[1]).upper() in ("ON", "1"):
+                        raise LockUnavailable(
+                            f"数据库处于 {var}=ON，禁止启动唯一后端实例"
+                        )
+                gr = conn.execute(
+                    text("SHOW VARIABLES LIKE 'group_replication_group_name'")
+                ).fetchone()
+                if gr and str(gr[1]).strip():
+                    raise LockUnavailable(
+                        "数据库启用了 Group Replication，禁止依赖单实例命名锁启动"
+                    )
                 got = conn.execute(
                     text("SELECT GET_LOCK(:n, 0)"), {"n": self._name}
                 ).scalar()
@@ -154,10 +170,13 @@ class HostProcessLock:
             if self._fd is not None:
                 raise RuntimeError(f"主机锁 {self._path} 已在本对象上取得，不要重复 acquire")
             self._path.parent.mkdir(parents=True, exist_ok=True)
-            fd = os.open(str(self._path), os.O_CREAT | os.O_RDWR)
+            flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_BINARY", 0)
+            fd = os.open(str(self._path), flags)
             try:
                 if os.name == "nt":
                     # 确保文件至少有 1 字节，再在偏移 0 处加非阻塞排他锁
+                    if os.fstat(fd).st_size == 0:
+                        os.write(fd, b"0")
                     os.lseek(fd, 0, os.SEEK_SET)
                     msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
                 else:

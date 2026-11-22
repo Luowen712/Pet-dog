@@ -90,24 +90,52 @@ describe('页面冒烟', () => {
     expect(view.text()).toContain('创建账号')
   })
 
-  it('设备页列出 mock 设备', async () => {
+  it('设备页列出 mock 设备，并支持不解绑直接打开重连蓝牙面板', async () => {
     const view = await mountAt('/devices')
     expect(view.text()).toContain('我的设备')
     expect(view.text()).toContain('桌宠一号')
     expect(view.text()).toContain('进入控制台')
+    const reconnectBtn = view.findAll('button').find((b) => b.text().includes('重连蓝牙'))
+    expect(reconnectBtn).toBeTruthy()
+    await reconnectBtn!.trigger('click')
+    await flushPromises()
+    expect(view.text()).toContain('扫描并重连低功耗蓝牙')
+    expect(view.text()).toContain('SIM-ECB02H2-01')
+  })
+
+  it('无绑定设备时展示低功耗蓝牙扫描与直连，无配对码输入框', async () => {
+    const view = await mountAt('/devices')
+    const { useDeviceStore } = await import('@/stores/device')
+    const deviceStore = useDeviceStore()
+    deviceStore.devices = []
+    await deviceStore.scanBle()
+    await flushPromises()
+    expect(view.text()).toContain('BLE / ECB02H2')
+    expect(view.text()).toContain('SIM-ECB02H2-01')
+    expect(view.text()).not.toContain('输入 6 位配对码')
   })
 
   it('控制台铺出 19 个动作按钮，其中只有 7 个启用，7 张表情', async () => {
     const view = await mountAt('/console')
     expect(view.text()).toContain('动作指令')
     expect(view.findAll('.action-btn')).toHaveLength(19)
-    expect(view.findAll('.action-btn.disabled')).toHaveLength(12)
+    // 等待 WS open 与本次 HTTP 基线；未完成同步前不许控制。
+    await vi.waitFor(() => expect(view.findAll('.action-btn.disabled')).toHaveLength(12))
     expect(view.findAll('.action-btn:not(.disabled)')).toHaveLength(7)
     expect(view.findAll('.face-btn')).toHaveLength(7)
   })
 
+  it('断开实时通道后不允许继续点击动作', async () => {
+    const view = await mountAt('/console')
+    const { usePetStore } = await import('@/stores/pet')
+    usePetStore().disconnect()
+    await flushPromises()
+    expect(view.findAll('.action-btn:not(.disabled)')).toHaveLength(0)
+  })
+
   it('点动作先黄；完成后绿 1.5 秒，然后自动熄灭', async () => {
     const view = await mountAt('/console')
+    await vi.waitFor(() => expect(view.findAll('.action-btn:not(.disabled)')).toHaveLength(7))
     const button = view.findAll('.action-btn:not(.disabled)')[0]
     await button.trigger('click')
     await flushPromises()

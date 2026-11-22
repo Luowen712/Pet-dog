@@ -42,9 +42,12 @@ export interface Device {
   supported_actions: number[]
 }
 
-export interface ClaimableDevice {
-  id: number
+export interface BleDevice {
+  address: string
   name: string
+  rssi: number | null
+  transport: 'ble' | 'sim'
+  bound_to_me?: boolean
 }
 
 export interface DeviceStatus {
@@ -62,7 +65,7 @@ export interface DeviceStatus {
   volume: number | null
   weather_code: number | null
   temp: number | null
-  updated_at: string
+  updated_at: string | null
 }
 
 export type CommandStatus =

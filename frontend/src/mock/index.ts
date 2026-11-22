@@ -352,8 +352,8 @@ export async function matchMock(config: AxiosRequestConfig): Promise<MockHit> {
     if (!/^[a-zA-Z0-9_\u4e00-\u9fa5]{3,20}$/.test(username)) {
       throw new ApiError(40002, '用户名需 3–20 位字母、数字、下划线或中文')
     }
-    if (password.length < 6) {
-      throw new ApiError(40002, '密码至少 6 位')
+    if (password.length < 10 || password.length > 128) {
+      throw new ApiError(40002, '密码需要 10–128 位')
     }
     if (username === 'admin' || readUsers().some((user) => user.username === username)) {
       throw new ApiError(40900, '用户名已存在')
@@ -373,10 +373,55 @@ export async function matchMock(config: AxiosRequestConfig): Promise<MockHit> {
     return hit(devices.map(freshDevice))
   }
 
+  if (method === 'get' && path === '/devices/ble/scan') {
+    return hit([
+      {
+        address: 'SIM-ECB02H2-01',
+        name: 'PetDog-ECB02H2 (SIM)',
+        rssi: -45,
+        transport: 'sim',
+        bound_to_me: devices.some((d) => d.id === 1),
+      },
+    ])
+  }
+
+  if (method === 'post' && path === '/devices/ble/connect') {
+    const address = String(body.address ?? '').trim()
+    if (!address) throw new ApiError(40002, '蓝牙设备地址格式不合法')
+    const existing = devices[0]
+    if (existing) return hit(freshDevice(existing))
+    const created: Device = {
+      id: 1,
+      name: String(body.name ?? address),
+      online: true,
+      firmware: '2.0.0',
+      last_heartbeat: iso(),
+      battery: runtime.battery,
+      location: '',
+      binding_state: 'bound',
+      control_state: 'ready',
+      supported_actions: [48, 49, 50, 51, 52, 53, 54],
+    }
+    devices.push(created)
+    return hit(freshDevice(created))
+  }
+
+  const bindingMatch = path.match(/^\/devices\/(\d+)\/binding$/)
+  if (method === 'delete' && bindingMatch) {
+    const targetId = Number(bindingMatch[1])
+    const idx = devices.findIndex((item) => item.id === targetId)
+    if (idx >= 0) devices.splice(idx, 1)
+    return hit({ unbound: true, handover_required: true })
+  }
+
   const statusMatch = path.match(/^\/devices\/(\d+)\/status$/)
   if (method === 'get' && statusMatch) {
     return hit({
       device_id: Number(statusMatch[1]),
+      online: !!devices.find((d) => d.id === Number(statusMatch[1]))?.online,
+      control_state: devices.find((d) => d.id === Number(statusMatch[1]))?.control_state ?? 'offline',
+      session_id: 'mock',
+      state_revision: 1,
       battery: runtime.battery,
       voltage: runtime.voltage,
       action: runtime.action,
@@ -402,8 +447,8 @@ export async function matchMock(config: AxiosRequestConfig): Promise<MockHit> {
     const device = devices.find((item) => item.id === Number(deviceMatch[1]))
     if (!device) throw new ApiError(40400, '设备不存在')
     const name = String(body.name ?? '').trim()
-    if (name.length < 1 || name.length > 20) {
-      throw new ApiError(40002, '名字需要 1–20 个字符')
+    if (name.length < 1 || name.length > 64) {
+      throw new ApiError(40002, '名字需要 1–64 个字符')
     }
     device.name = name
     saveDeviceName(device.id, name)
@@ -461,6 +506,7 @@ export async function matchMock(config: AxiosRequestConfig): Promise<MockHit> {
       log.cost_ms = cost
       log.response = '0x81 受理 / 0x02 完成'
       receipt.status = 'done'
+      receipt.revision += 1
       receipt.updated_at = iso()
       receipt.finished_at = receipt.updated_at
       runtime.emit({ event: 'ack', data: { cmd_id: cmdId, seq, status: 'OK', cost_ms: cost } })

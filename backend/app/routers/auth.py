@@ -1,5 +1,7 @@
+import asyncio
 import re
 import secrets
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
@@ -7,8 +9,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import ratelimit as rl
-from app.db import get_db
+from app.db import SessionLocal, get_db
 from app.deps import current_user
+from app.link.send_gate import RevokeEvent, send_gate
 from app.models import Device, User
 from app.resp import fail, ok
 from app.security import hash_pwd, make_token, needs_rehash, verify_pwd
@@ -109,16 +112,24 @@ def register(body: RegisterIn, request: Request, db: Session = Depends(get_db)):
         db.rollback()
         return fail(40900, "用户名已存在")
 
-    return ok({"username": username, "name": username})
+    db.refresh(u)
+    return ok(user_out(u))
 
 
 @router.post("/logout")
 def logout(user: dict = Depends(current_user), db: Session = Depends(get_db)):
-    u = db.query(User).filter(User.id == user.get("uid")).first()
-    if not u:
-        raise HTTPException(401, detail={"code": 40101, "message": "登录已过期"})
-    u.token_version += 1
-    db.commit()
+    uid = user.get("uid")
+    new_tv: int | None = None
+    with send_gate.hold():
+        u = db.query(User).filter(User.id == uid).with_for_update().first()
+        if not u or u.status != "active":
+            raise HTTPException(401, detail={"code": 40101, "message": "登录已过期"})
+        u.token_version += 1
+        new_tv = u.token_version
+        db.commit()
+    send_gate.notify_revoke(
+        RevokeEvent(uid=uid, device_pk=None, kind="logout", new_tv=new_tv)
+    )
     return ok({"logged_out": True})
 
 
@@ -133,8 +144,9 @@ def change_password(
     user: dict = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    u = db.query(User).filter(User.id == user.get("uid")).first()
-    if not u:
+    uid = user.get("uid")
+    u = db.query(User).filter(User.id == uid).first()
+    if not u or u.status != "active":
         raise HTTPException(401, detail={"code": 40101, "message": "登录已过期"})
 
     if not verify_pwd(u.password_hash, body.old_password):
@@ -146,9 +158,21 @@ def change_password(
     if body.new_password == body.old_password:
         return fail(40002, "新密码不能与原密码相同")
 
-    u.password_hash = hash_pwd(body.new_password)
-    u.token_version += 1
-    db.commit()
+    # 06:191 密码哈希先算完再拿 SendGate
+    new_hash = hash_pwd(body.new_password)
+    new_tv: int | None = None
+    with send_gate.hold():
+        u = db.query(User).filter(User.id == uid).with_for_update().first()
+        if not u or u.status != "active":
+            raise HTTPException(401, detail={"code": 40101, "message": "登录已过期"})
+        u.password_hash = new_hash
+        u.token_version += 1
+        new_tv = u.token_version
+        db.commit()
+
+    send_gate.notify_revoke(
+        RevokeEvent(uid=uid, device_pk=None, kind="password_change", new_tv=new_tv)
+    )
     return ok({"reauth_required": True})
 
 
@@ -158,51 +182,90 @@ class AccountDeleteIn(BaseModel):
 
 
 @router.delete("/account")
-def delete_account(
+async def delete_account(
     body: AccountDeleteIn,
+    request: Request,
     user: dict = Depends(current_user),
-    db: Session = Depends(get_db),
 ):
-    u = db.query(User).filter(User.id == user.get("uid")).first()
-    if not u:
-        raise HTTPException(401, detail={"code": 40101, "message": "登录已过期"})
+    uid = user.get("uid")
 
-    if not verify_pwd(u.password_hash, body.password):
-        return fail(40001, "密码错误")
+    def _verify_and_revoke():
+        with SessionLocal() as db:
+            u = db.query(User).filter(User.id == uid).first()
+            if not u or u.status != "active":
+                raise HTTPException(401, detail={"code": 40101, "message": "登录已过期"})
 
-    # 契约 02:230：最后一个 active admin 禁止注销，否则系统再没有管理员。
-    # 放在密码校验之后，避免未验证身份就能探出「谁是最后一个管理员」。
-    if u.role == "admin":
-        others = (
-            db.query(User)
-            .filter(User.role == "admin", User.status == "active", User.id != u.id)
-            .count()
+            # Argon2 校验放在 SendGate 锁外（06:191）
+            if not verify_pwd(u.password_hash, body.password):
+                return None, None, fail(40001, "密码错误")
+
+        unbound_devices: list[tuple[int, int]] = []
+        with send_gate.hold(), SessionLocal() as db:
+            u = db.query(User).filter(User.id == uid).with_for_update().first()
+            if not u or u.status != "active":
+                raise HTTPException(401, detail={"code": 40101, "message": "登录已过期"})
+
+            # 契约 02:230：最后一个 active admin 禁止注销；加行锁防止两管理员并发注销删光管理员。
+            if u.role == "admin":
+                active_admins = (
+                    db.query(User)
+                    .filter(User.role == "admin", User.status == "active")
+                    .with_for_update()
+                    .all()
+                )
+                if len([a for a in active_admins if a.id != u.id]) == 0:
+                    return None, None, fail(40900, "系统必须保留至少一个管理员")
+
+            if body.confirm_username.strip() != u.username:
+                return None, None, fail(40002, "用户名不匹配")
+
+            # 解绑与 DELETE /devices/{id}/binding 保持同一口径（06:296 / S01）：
+            # 五列同事务修改 + be + 1，防止换主后读到旧主人数据。
+            owned = (
+                db.query(Device)
+                .filter(Device.owner_id == u.id)
+                .order_by(Device.id)
+                .with_for_update()
+                .all()
+            )
+            for d in owned:
+                old_be = d.be
+                d.owner_id = None
+                d.status = "claimable"
+                d.handover_state = "required"
+                d.bound_at = None
+                d.be = old_be + 1
+                unbound_devices.append((d.id, d.be))
+
+            u.username = "~del~%d~%s" % (u.id, secrets.token_hex(4))
+            u.status = "revoking"
+            u.deleted_at = datetime.now()
+            u.token_version += 1
+            new_tv = u.token_version
+            db.commit()
+        return unbound_devices, new_tv, None
+
+    unbound_devices, new_tv, err = await asyncio.to_thread(_verify_and_revoke)
+    if err is not None:
+        return err
+
+    if unbound_devices:
+        for dpk, new_be in unbound_devices:
+            send_gate.notify_revoke(
+                RevokeEvent(
+                    uid=uid,
+                    device_pk=dpk,
+                    kind="account_delete",
+                    new_tv=new_tv,
+                    new_be=new_be,
+                )
+            )
+        from app.main import stop_ble_session_if_matching
+
+        await stop_ble_session_if_matching(request.app, {dpk for dpk, _ in unbound_devices})
+    else:
+        send_gate.notify_revoke(
+            RevokeEvent(uid=uid, device_pk=None, kind="account_delete", new_tv=new_tv)
         )
-        if others == 0:
-            return fail(40900, "系统必须保留至少一个管理员")
-
-    if body.confirm_username.strip() != u.username:
-        return fail(40002, "用户名不匹配")
-
-    # 解绑必须四列一起改。ck_device_owner_status 要求「无主必非 bound」，
-    # 只清 owner_id 会立刻违反 CHECK 报 3819，整个注销事务回滚、账号删不掉。
-    # 重置成 claimable/required 与 0003 回填的口径一致：无主设备回到可被认领状态。
-    # be（绑定纪元）不在这里 +1 —— 它属于「下一次绑定」的语义，
-    # 下次被认领时 +1 才能让旧主人的旧命令失效。
-    db.query(Device).filter(Device.owner_id == u.id).update(
-        {
-            "owner_id": None,
-            "status": "claimable",
-            "handover_state": "required",
-            "bound_at": None,
-        },
-        synchronize_session=False,
-    )
-
-    u.username = "~del~%d~%s" % (u.id, secrets.token_hex(4))
-
-    u.status = "revoking"
-    u.token_version += 1
-    db.commit()
 
     return ok({"status": "revoking"})

@@ -1,10 +1,14 @@
 """把FastAPI抛出的错误改造成统一外壳"""
 
+import logging
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.resp import fail
+
+logger = logging.getLogger(__name__)
 
 
 def register_handlers(app: FastAPI) -> None:
@@ -14,6 +18,7 @@ def register_handlers(app: FastAPI) -> None:
     async def on_http_error(request: Request, exc: HTTPException):
 
         detail = exc.detail
+        headers: dict[str, str] = {}
         if isinstance(detail, dict):
             code = int(detail.get("code", 40000))
             message = str(detail.get("message", "请求失败"))
@@ -22,13 +27,14 @@ def register_handlers(app: FastAPI) -> None:
             # 限流（42900）靠 retry_after 告诉客户端该等多久。
             if detail.get("retry_after") is not None:
                 body["retry_after"] = detail["retry_after"]
+                headers["Retry-After"] = str(detail["retry_after"])
             if detail.get("reason") is not None:
                 body["reason"] = detail["reason"]
         else:
             code = 40000
             message = str(detail) if detail else "请求失败"
             body = fail(code, message)
-        return JSONResponse(status_code=exc.status_code, content=body)
+        return JSONResponse(status_code=exc.status_code, content=body, headers=headers)
 
     @app.exception_handler(RequestValidationError)
     async def on_validation_error(request: Request, exc: RequestValidationError):
@@ -39,7 +45,8 @@ def register_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def on_exception(request: Request, exc: Exception):
-        """其它异常或未捕获异常"""
+        """其它异常或未捕获异常：记录堆栈并按 06:19 返回 HTTP 500 + 50000。"""
+        logger.exception("未捕获异常 %s %s", request.method, request.url.path)
         return JSONResponse(
-            status_code=200, content=fail(50000, message="服务器内部错误")
+            status_code=500, content=fail(50000, message="服务器内部错误")
         )

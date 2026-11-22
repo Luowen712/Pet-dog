@@ -41,7 +41,9 @@ const rules = computed<FormRules>(() => ({
   ],
   password: [
     { required: true, message: '请输入密码', trigger: 'blur' },
-    ...(isRegister.value ? [{ min: 6, message: '密码至少 6 位', trigger: 'blur' }] : []),
+    ...(isRegister.value
+      ? [{ min: 10, max: 128, message: '密码需要 10–128 位', trigger: 'blur' }]
+      : []),
   ],
   confirm: isRegister.value ? [confirmRule] : [],
 }))
@@ -67,8 +69,15 @@ function fillDemo(): void {
   form.password = 'admin123'
 }
 
+function safeRedirect(raw: unknown): string {
+  if (typeof raw === 'string' && raw.startsWith('/') && !raw.startsWith('//')) {
+    return raw
+  }
+  return '/devices'
+}
+
 async function onSubmit(): Promise<void> {
-  if (!formRef.value || auth.loading || celebrating.value) return
+  if (!formRef.value || auth.loading) return
   try {
     await formRef.value.validate()
   } catch {
@@ -97,8 +106,7 @@ async function onSubmit(): Promise<void> {
     ElMessage.success('登录成功')
     // 停一下让狗摇完，再跳转
     await new Promise((resolve) => window.setTimeout(resolve, 1200))
-    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/devices'
-    await router.replace(redirect)
+    await router.replace(safeRedirect(route.query.redirect))
   } catch {
     // 错误提示由 request 层统一弹出
   }
@@ -186,7 +194,7 @@ onBeforeUnmount(() => {
                 <el-input
                   v-model="form.password"
                   type="password"
-                  :placeholder="isRegister ? '至少 6 位' : '••••••'"
+                  :placeholder="isRegister ? '10–128 位' : '••••••'"
                   show-password
                   autocomplete="current-password"
                 />
@@ -230,7 +238,7 @@ onBeforeUnmount(() => {
           </div>
 
           <div v-if="mockMode && !isRegister" class="demo">
-            <span>DEMO · admin / 123456</span>
+            <span>DEMO · admin / admin123</span>
             <el-link type="primary" underline="never" class="fill" @click="fillDemo">
               一键填入
             </el-link>

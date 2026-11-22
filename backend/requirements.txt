@@ -4,6 +4,7 @@ sqlalchemy==2.1.6
 pydantic==2.14.2
 pydantic-settings==2.16.2
 pyserial==3.5
+bleak==3.1.0
 httpx==0.28.1
 apscheduler==3.11.3
 PyJWT==2.15.1

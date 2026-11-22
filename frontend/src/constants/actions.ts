@@ -38,6 +38,7 @@ export const ACTIONS: ActionDef[] = [
 export const ACTION_BY_CODE = new Map<number, ActionDef>(ACTIONS.map((item) => [item.code, item]))
 
 export function actionName(code: number): string {
+  if (code === 0) return '空闲'
   return ACTION_BY_CODE.get(code)?.name ?? `未知动作 ${actionHex(code)}`
 }
 

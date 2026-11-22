@@ -2,6 +2,7 @@ import type { WsEvent } from '@/types'
 import { runtime } from '@/mock/runtime'
 import { fetchWsTicket } from '@/api/event'
 import { ApiError } from '@/utils/errors'
+import { STALE_SESSION_CODE } from '@/utils/request'
 
 export type SocketStatus = 'connecting' | 'open' | 'closed'
 
@@ -9,7 +10,7 @@ export interface SocketOptions {
   deviceId: number
   onEvent: (event: WsEvent) => void
   onStatus: (status: SocketStatus) => void
-  /** 服务端关闭码：1004 身份失效，1008 设备归属丢失，4009 连接数超限 */
+  /** 服务端关闭码：4401 身份失效，1008 设备归属丢失，4009 连接数超限 */
   onClose: (code: number, message?: string) => void
 }
 
@@ -24,14 +25,17 @@ const SILENCE_MS = 75000
  * 三件事和契约绑定：
  * 1. JWT 不进 URL —— 先 POST /api/events/ticket 换一张 30 秒、一次性的票据，票据随 URL 走；
  * 2. 每次建连（含重连）都要重新取票，旧票用过即废；
- * 3. 关闭码决定下一步：1000 不重连；1004 回登录；1008 清设备；4003 重新取票；
+ * 3. 关闭码决定下一步：1000 不重连；4401 回登录；1008 清设备；4003 重新取票；
  *    4009 停止自动重试；1001/1011 按 1→2→4→8→10 秒退避。
  */
 export class DeviceSocket {
   private options: SocketOptions
   private ws: WebSocket | null = null
   private retry = 0
+  private immediate4003Used = false
+  private attemptId = 0
   private timer: number | null = null
+  private stableTimer: number | null = null
   private watchdog: number | null = null
   private closed = false
   /** 自己主动断开（看门狗超时/传输错误），不是服务端正常关闭 */
@@ -50,67 +54,115 @@ export class DeviceSocket {
     }
     this.closed = false
     this.clearReconnect()
+    this.clearStableTimer()
+    this.attemptId += 1
+    const myAttempt = this.attemptId
     this.options.onStatus('connecting')
 
     let ticket = ''
     try {
       ticket = (await fetchWsTicket(this.options.deviceId)).ticket
     } catch (error) {
-      if (this.closed) return
+      if (this.closed || myAttempt !== this.attemptId) return
       this.options.onStatus('closed')
-      if (error instanceof ApiError && error.code === 40400) {
-        // 设备不可见/已解绑：停止重连，交给调用方清设备
-        this.closed = true
-        this.options.onClose(1008)
-        return
+      if (error instanceof ApiError) {
+        if (error.code === STALE_SESSION_CODE) {
+          this.closed = true
+          return
+        }
+        if ([401, 403, 40100, 40101, 40300].includes(error.code)) {
+          this.closed = true
+          return
+        }
+        if (error.code === 40400) {
+          // 设备不可见/已解绑：停止重连，交给调用方清设备
+          this.closed = true
+          this.options.onClose(1008)
+          return
+        }
+        if (error.code === 42900 && typeof error.retryAfter === 'number' && error.retryAfter > 0) {
+          this.scheduleReconnect(error.retryAfter)
+          return
+        }
       }
       this.scheduleReconnect()
       return
     }
-    if (this.closed) return
+    if (this.closed || myAttempt !== this.attemptId) return
 
     if (USE_MOCK) {
-      this.connectMock()
+      this.connectMock(myAttempt)
       return
     }
-    this.openSocket(ticket)
+    this.openSocket(ticket, myAttempt)
+  }
+
+  resync(): void {
+    this.close()
+    this.closed = false
+    this.scheduleReconnect()
   }
 
   close(): void {
     this.closed = true
+    this.attemptId += 1
     this.clearReconnect()
+    this.clearStableTimer()
     this.stopWatchdog()
     this.mockOff?.()
     this.mockOff = null
-    this.ws?.close(1000)
+    const old = this.ws
     this.ws = null
+    if (old) {
+      old.onopen = null
+      old.onmessage = null
+      old.onerror = null
+      old.onclose = null
+      old.close(1000)
+    }
     this.options.onStatus('closed')
   }
 
-  private openSocket(ticket: string): void {
+  private openSocket(ticket: string, myAttempt: number): void {
     const ws = new WebSocket(this.buildUrl(ticket))
     this.ws = ws
     ws.onopen = () => {
-      this.retry = 0
+      if (this.closed || myAttempt !== this.attemptId) {
+        ws.close(1000)
+        return
+      }
       this.touchWatchdog()
+      this.armStableReset(myAttempt)
       this.options.onStatus('open')
     }
     ws.onmessage = (event) => {
+      if (this.closed || myAttempt !== this.attemptId) return
+      this.retry = 0
+      this.immediate4003Used = false
       this.touchWatchdog()
       this.handleMessage(event.data)
     }
     ws.onerror = () => {
+      if (this.closed || myAttempt !== this.attemptId) return
       this.stale = true
       ws.close()
     }
-    ws.onclose = (event) => this.handleClose(event.code)
+    ws.onclose = (event) => {
+      if (myAttempt !== this.attemptId) return
+      this.handleClose(event.code)
+    }
   }
 
-  private connectMock(): void {
+  private connectMock(myAttempt: number): void {
     window.setTimeout(() => {
-      if (this.closed) return
+      if (this.closed || myAttempt !== this.attemptId) return
+      this.retry = 0
+      this.immediate4003Used = false
       this.options.onStatus('open')
-      this.mockOff = runtime.subscribe((event) => this.options.onEvent(event))
+      this.mockOff = runtime.subscribe((event) => {
+        if (this.closed || myAttempt !== this.attemptId) return
+        this.options.onEvent(event)
+      })
       this.options.onEvent({
         event: 'link',
         data: {
@@ -142,6 +194,7 @@ export class DeviceSocket {
   /** 关闭码语义见 docs/plan/06 §5 */
   private handleClose(code: number): void {
     this.stopWatchdog()
+    this.clearStableTimer()
     this.ws = null
     this.options.onStatus('closed')
     if (this.closed) return
@@ -156,10 +209,10 @@ export class DeviceSocket {
         // 用户主动关闭/页面卸载，不要重连
         this.closed = true
         return
-      case 1004:
+      case 4401:
         // 身份失效：换账号、改密、登出全部会话
         this.closed = true
-        this.options.onClose(1004)
+        this.options.onClose(4401)
         return
       case 1008:
         // 设备被解绑或归属丢失：只清设备，保留登录
@@ -167,8 +220,13 @@ export class DeviceSocket {
         this.options.onClose(1008)
         return
       case 4003:
-        // 票据无效/过期/已用：重新取票
-        this.scheduleReconnect(0)
+        // 票据无效/过期/已用：首次立即重试，若仍连续 4003 退避防止死循环
+        if (!this.immediate4003Used) {
+          this.immediate4003Used = true
+          this.scheduleReconnect(0)
+        } else {
+          this.scheduleReconnect()
+        }
         return
       case 4009:
         this.closed = true
@@ -212,6 +270,24 @@ export class DeviceSocket {
     if (this.watchdog !== null) {
       window.clearTimeout(this.watchdog)
       this.watchdog = null
+    }
+  }
+
+  private armStableReset(myAttempt: number): void {
+    this.clearStableTimer()
+    this.stableTimer = window.setTimeout(() => {
+      this.stableTimer = null
+      if (!this.closed && myAttempt === this.attemptId) {
+        this.retry = 0
+        this.immediate4003Used = false
+      }
+    }, 5000)
+  }
+
+  private clearStableTimer(): void {
+    if (this.stableTimer !== null) {
+      window.clearTimeout(this.stableTimer)
+      this.stableTimer = null
     }
   }
 

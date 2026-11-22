@@ -1,11 +1,11 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
-import type { ClaimableDevice, Device } from '@/types'
+import type { BleDevice, Device } from '@/types'
 import {
-  claimDevice as claimDeviceApi,
-  listClaimableDevices,
+  connectBleDevice as connectBleDeviceApi,
   listDevices,
   renameDevice,
+  scanBleDevices,
   unbindDevice as unbindDeviceApi,
 } from '@/api/device'
 import {
@@ -16,12 +16,14 @@ import {
 
 export const useDeviceStore = defineStore('device', () => {
   const devices = ref<Device[]>([])
-  const claimable = ref<ClaimableDevice[]>([])
+  const bleDevices = ref<BleDevice[]>([])
+  const scanning = ref(false)
   const loading = ref(false)
   const loaded = ref(false)
   const currentId = ref(0)
   /** 当前绑定的是哪个账号；换账号必须先清空，不能沿用上一个人的设备 */
   let ownerUid: number | null = null
+  let inflightLoad: Promise<void> | null = null
 
   const current = computed<Device | null>(
     () => devices.value.find((device) => device.id === currentId.value) ?? null,
@@ -31,8 +33,9 @@ export const useDeviceStore = defineStore('device', () => {
   function bindUser(uid: number | null): void {
     if (ownerUid === uid) return
     ownerUid = uid
+    inflightLoad = null
     devices.value = []
-    claimable.value = []
+    bleDevices.value = []
     loaded.value = false
     currentId.value = uid ? getStoredDeviceId(uid) ?? 0 : 0
   }
@@ -44,34 +47,51 @@ export const useDeviceStore = defineStore('device', () => {
       currentId.value = 0
       return
     }
-    loading.value = true
-    try {
-      devices.value = await listDevices()
-      loaded.value = true
-      const exists = devices.value.some((device) => device.id === currentId.value)
-      if (!exists) {
-        if (devices.value.length > 0) {
-          select(devices.value[0].id)
-        } else {
-          currentId.value = 0
-          clearStoredDeviceId(ownerUid)
+    if (inflightLoad) return inflightLoad
+    const expectedUid = ownerUid
+    const run = async (): Promise<void> => {
+      loading.value = true
+      try {
+        const list = await listDevices()
+        if (ownerUid !== expectedUid) return
+        devices.value = list
+        loaded.value = true
+        const exists = devices.value.some((device) => device.id === currentId.value)
+        if (!exists) {
+          if (devices.value.length > 0) {
+            select(devices.value[0].id)
+          } else {
+            currentId.value = 0
+            clearStoredDeviceId(expectedUid)
+          }
         }
+      } finally {
+        if (ownerUid === expectedUid) loading.value = false
+        if (inflightLoad === job) inflightLoad = null
       }
-    } finally {
-      loading.value = false
     }
+    const job = run()
+    inflightLoad = job
+    return job
   }
 
-  async function loadClaimable(): Promise<void> {
+  async function scanBle(): Promise<void> {
+    if (scanning.value) return
+    const expectedUid = ownerUid
+    scanning.value = true
     try {
-      claimable.value = await listClaimableDevices()
+      const found = await scanBleDevices()
+      if (ownerUid !== expectedUid) return
+      bleDevices.value = found
     } catch {
-      claimable.value = []
+      if (ownerUid === expectedUid) bleDevices.value = []
+    } finally {
+      if (ownerUid === expectedUid) scanning.value = false
     }
   }
 
-  async function claim(deviceId: number, code: string): Promise<Device> {
-    const device = await claimDeviceApi(deviceId, code)
+  async function connectBle(address: string, name?: string): Promise<Device> {
+    const device = await connectBleDeviceApi(address, name)
     await load()
     select(device.id)
     return device
@@ -84,7 +104,7 @@ export const useDeviceStore = defineStore('device', () => {
       clearStoredDeviceId(ownerUid)
     }
     await load()
-    await loadClaimable()
+    await scanBle()
   }
 
   async function rename(id: number, name: string): Promise<void> {
@@ -95,6 +115,7 @@ export const useDeviceStore = defineStore('device', () => {
   }
 
   function select(id: number): void {
+    if (id > 0 && loaded.value && !devices.value.some((device) => device.id === id)) return
     currentId.value = id
     if (ownerUid && id > 0) setStoredDeviceId(ownerUid, id)
   }
@@ -111,15 +132,18 @@ export const useDeviceStore = defineStore('device', () => {
 
   function reset(): void {
     ownerUid = null
+    inflightLoad = null
     devices.value = []
-    claimable.value = []
+    bleDevices.value = []
+    scanning.value = false
     loaded.value = false
     currentId.value = 0
   }
 
   return {
     devices,
-    claimable,
+    bleDevices,
+    scanning,
     loading,
     loaded,
     currentId,
@@ -127,8 +151,8 @@ export const useDeviceStore = defineStore('device', () => {
     onlineCount,
     bindUser,
     load,
-    loadClaimable,
-    claim,
+    scanBle,
+    connectBle,
     unbind,
     rename,
     select,

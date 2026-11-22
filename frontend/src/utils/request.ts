@@ -5,7 +5,7 @@ import type { ApiResponse } from '@/types'
 import { matchMock } from '@/mock'
 import { ApiError } from './errors'
 import { currentEpoch } from './epoch'
-import { clearSession, getToken } from './session'
+import { clearSession, getStoredUser, getToken } from './session'
 
 const USE_MOCK = import.meta.env.VITE_USE_MOCK === 'true'
 
@@ -25,20 +25,25 @@ http.interceptors.request.use((config) => {
 
 let redirecting = false
 
-async function handleUnauthorized(): Promise<void> {
+export async function handleUnauthorized(warningMessage = '登录已过期，请重新登录'): Promise<void> {
   if (redirecting) return
   redirecting = true
-  clearSession()
+  const oldUid = getStoredUser()?.id ?? null
   try {
-    const [{ default: router }, { useAuthStore },{useDeviceStore}] = await Promise.all([
-      import('@/router'),
-      import('@/stores/auth'),
-      import('@/stores/device'),
-    ])
+    const [{ default: router }, { useAuthStore }, { useDeviceStore }, { usePetStore }] =
+      await Promise.all([
+        import('@/router'),
+        import('@/stores/auth'),
+        import('@/stores/device'),
+        import('@/stores/pet'),
+      ])
+    // 先清理 petStore（断开 WS 并按旧 uid 清本地 pending 缓存），再清 session 与 authStore
+    usePetStore().reset(oldUid)
+    clearSession()
     useAuthStore().reset()
     useDeviceStore().reset()
     if (router.currentRoute.value.path !== '/login') {
-      ElMessage.warning('登录已过期，请重新登录')
+      ElMessage.warning(warningMessage)
       await router.replace({
         path: '/login',
         query: { redirect: router.currentRoute.value.fullPath },
@@ -81,9 +86,17 @@ export async function request<T>(
     const response = await http.request<ApiResponse<T>>(config)
     if (epoch !== currentEpoch()) throw new ApiError(STALE_SESSION_CODE, '会话已切换')
 
-    const body = response.data
+    const body = response.data as ApiResponse<T> & {
+      reason?: string | null
+      retry_after?: number | null
+    }
     if (body && typeof body === 'object' && typeof body.code === 'number') {
-      if (body.code !== 0) throw new ApiError(body.code, body.message || '请求失败')
+      if (body.code !== 0) {
+        throw new ApiError(body.code, body.message || '请求失败', {
+          reason: body.reason ?? null,
+          retryAfter: body.retry_after ?? null,
+        })
+      }
       return body.data
     }
     return body as unknown as T
@@ -98,9 +111,25 @@ export async function request<T>(
     }
     if (axios.isAxiosError(error)) {
       const status = error.response?.status
+      const payload = error.response?.data as
+        | { code?: number; message?: string; reason?: string | null; retry_after?: number | null }
+        | undefined
+      const bodyCode = typeof payload?.code === 'number' ? payload.code : undefined
+      const retryAfter =
+        typeof payload?.retry_after === 'number' ? payload.retry_after : null
+      const reason = typeof payload?.reason === 'string' ? payload.reason : null
+
       if (status === 401) {
         await handleUnauthorized()
-        throw new ApiError(40101, '登录已过期')
+        throw new ApiError(bodyCode ?? 40101, payload?.message || '登录已过期', { reason })
+      }
+      if (bodyCode !== undefined) {
+        const msg =
+          bodyCode === 42900 && retryAfter
+            ? `${payload?.message || '请求过于频繁'}（${retryAfter}s 后重试）`
+            : payload?.message || `请求失败（HTTP ${status}）`
+        if (!options.silent) ElMessage.error(msg)
+        throw new ApiError(bodyCode, msg, { reason, retryAfter })
       }
       const message = status ? `请求失败（HTTP ${status}）` : '网络异常，请检查后端服务是否已启动'
       if (!options.silent) ElMessage.error(message)
