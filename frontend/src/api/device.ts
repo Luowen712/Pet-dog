@@ -22,7 +22,7 @@ export function getDeviceStatus(id: number): Promise<DeviceStatus> {
 }
 
 export function scanBleDevices(): Promise<BleDevice[]> {
-  return request<BleDevice[]>({ url: '/devices/ble/scan' })
+  return request<BleDevice[]>({ url: '/devices/ble/scan', timeout: 15000 })
 }
 
 export function connectBleDevice(address: string, name?: string): Promise<Device> {
@@ -30,6 +30,7 @@ export function connectBleDevice(address: string, name?: string): Promise<Device
     url: '/devices/ble/connect',
     method: 'post',
     data: { address, ...(name ? { name } : {}) },
+    timeout: 20000,
   })
 }
 

@@ -24,6 +24,7 @@ export const useDeviceStore = defineStore('device', () => {
   /** 当前绑定的是哪个账号；换账号必须先清空，不能沿用上一个人的设备 */
   let ownerUid: number | null = null
   let inflightLoad: Promise<void> | null = null
+  let scanGen = 0
 
   const current = computed<Device | null>(
     () => devices.value.find((device) => device.id === currentId.value) ?? null,
@@ -34,6 +35,9 @@ export const useDeviceStore = defineStore('device', () => {
     if (ownerUid === uid) return
     ownerUid = uid
     inflightLoad = null
+    scanGen += 1
+    loading.value = false
+    scanning.value = false
     devices.value = []
     bleDevices.value = []
     loaded.value = false
@@ -76,17 +80,18 @@ export const useDeviceStore = defineStore('device', () => {
   }
 
   async function scanBle(): Promise<void> {
-    if (scanning.value) return
+    if (scanning.value || !ownerUid) return
     const expectedUid = ownerUid
+    const myGen = ++scanGen
     scanning.value = true
     try {
       const found = await scanBleDevices()
-      if (ownerUid !== expectedUid) return
+      if (myGen !== scanGen || ownerUid !== expectedUid) return
       bleDevices.value = found
     } catch {
-      if (ownerUid === expectedUid) bleDevices.value = []
+      if (myGen === scanGen && ownerUid === expectedUid) bleDevices.value = []
     } finally {
-      if (ownerUid === expectedUid) scanning.value = false
+      if (myGen === scanGen) scanning.value = false
     }
   }
 
@@ -133,8 +138,10 @@ export const useDeviceStore = defineStore('device', () => {
   function reset(): void {
     ownerUid = null
     inflightLoad = null
+    scanGen += 1
     devices.value = []
     bleDevices.value = []
+    loading.value = false
     scanning.value = false
     loaded.value = false
     currentId.value = 0

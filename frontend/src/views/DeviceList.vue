@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { EditPen, Link, Refresh, SwitchButton } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -7,10 +7,12 @@ import EmptyState from '@/components/EmptyState.vue'
 import PetCharm from '@/components/PetCharm.vue'
 import type { Device } from '@/types'
 import { formatDateTime, formatRelative } from '@/utils/format'
+import { useAuthStore } from '@/stores/auth'
 import { useDeviceStore } from '@/stores/device'
 import { usePetStore } from '@/stores/pet'
 
 const router = useRouter()
+const auth = useAuthStore()
 const deviceStore = useDeviceStore()
 const pet = usePetStore()
 
@@ -29,9 +31,19 @@ const selectedBle = computed(
 const showBlePanel = computed(() => deviceStore.devices.length === 0 || blePanelOpen.value)
 
 onMounted(async () => {
+  if (auth.uid) deviceStore.bindUser(auth.uid)
   if (!deviceStore.loaded) await deviceStore.load()
-  if (deviceStore.devices.length === 0) await deviceStore.scanBle()
+  if (deviceStore.loaded && deviceStore.devices.length === 0) await deviceStore.scanBle()
 })
+
+watch(
+  () => [deviceStore.loaded, deviceStore.devices.length] as const,
+  ([loaded, count]) => {
+    if (loaded && count === 0 && deviceStore.bleDevices.length === 0 && !deviceStore.scanning) {
+      void deviceStore.scanBle()
+    }
+  },
+)
 
 function enter(device: Device): void {
   deviceStore.select(device.id)
@@ -51,6 +63,7 @@ async function openBleReconnect(): Promise<void> {
 }
 
 async function scan(): Promise<void> {
+  if (auth.uid) deviceStore.bindUser(auth.uid)
   selectedAddress.value = null
   await deviceStore.scanBle()
 }

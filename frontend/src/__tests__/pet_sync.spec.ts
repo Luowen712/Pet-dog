@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
-import type { CommandReceipt, DeviceStatus, WsEvent } from '@/types'
+import type { BleDevice, CommandReceipt, DeviceStatus, WsEvent } from '@/types'
 
 type MockSocketRecord = {
   options: {
@@ -17,6 +17,7 @@ const sockets: MockSocketRecord[] = []
 const getDeviceStatusMock = vi.fn<() => Promise<DeviceStatus>>()
 const getCommandMock = vi.fn<(id: string) => Promise<CommandReceipt | null>>()
 const sendCommandMock = vi.fn()
+const scanBleDevicesMock = vi.fn<() => Promise<BleDevice[]>>(async () => [])
 const handleUnauthorizedMock = vi.fn()
 const routerReplaceMock = vi.fn<(to: unknown) => Promise<void>>(async () => {})
 
@@ -27,7 +28,7 @@ vi.mock('@/router', () => ({
 vi.mock('@/api/device', () => ({
   getDeviceStatus: (...args: unknown[]) => getDeviceStatusMock(...(args as [])),
   listDevices: vi.fn(async () => []),
-  scanBleDevices: vi.fn(async () => []),
+  scanBleDevices: () => scanBleDevicesMock(),
   connectBleDevice: vi.fn(),
   renameDevice: vi.fn(),
   unbindDevice: vi.fn(),
@@ -186,5 +187,36 @@ describe('pet store 重连对账、unknown 保留与关闭码', () => {
     await vi.waitFor(() => expect(routerReplaceMock).toHaveBeenCalledWith('/devices'))
     expect(deviceStore.devices).toHaveLength(0)
     expect(localStorage.getItem('petdog_token')).toBe('tok')
+  })
+
+  it('账号切换打断 BLE 扫描时不会把 scanning 锁死，后续扫描能正常拿到设备', async () => {
+    const { useDeviceStore } = await import('@/stores/device')
+    const deviceStore = useDeviceStore()
+    deviceStore.bindUser(1)
+
+    let resolveFirst!: (v: BleDevice[]) => void
+    scanBleDevicesMock.mockImplementationOnce(() => new Promise<BleDevice[]>((r) => { resolveFirst = r }))
+
+    const p1 = deviceStore.scanBle()
+    expect(deviceStore.scanning).toBe(true)
+
+    // 扫描途中切换账号
+    deviceStore.bindUser(2)
+    expect(deviceStore.scanning).toBe(false)
+
+    // 第一次迟到结果不得污染新账号，也不能卡住 scanning
+    resolveFirst([{ address: 'EC:B2:AA:21:9F:AF', name: 'Old', rssi: -20, transport: 'ble' }])
+    await p1
+    expect(deviceStore.bleDevices).toHaveLength(0)
+    expect(deviceStore.scanning).toBe(false)
+
+    // 新账号再次扫描应正常返回结果
+    scanBleDevicesMock.mockResolvedValueOnce([
+      { address: 'EC:B2:AA:21:9F:AF', name: 'EC:B2:AA:21:9F:AF', rssi: -18, transport: 'ble' },
+    ])
+    await deviceStore.scanBle()
+    expect(deviceStore.bleDevices).toHaveLength(1)
+    expect(deviceStore.bleDevices[0].address).toBe('EC:B2:AA:21:9F:AF')
+    expect(deviceStore.scanning).toBe(false)
   })
 })
