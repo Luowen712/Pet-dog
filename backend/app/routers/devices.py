@@ -199,6 +199,7 @@ async def connect_ble(
         )
         opened_port = None
         if has_lifespan and not reuse_session:
+            port_override = getattr(request.app.state, "ble_port_override", None)
             # 重连同一台设备时先释放旧会话句柄，避免单连接 BLE 模块 ECB02H2 拒连
             if (
                 cur_session is not None
@@ -207,9 +208,14 @@ async def connect_ble(
             ):
                 from app.main import stop_device_session
 
+                was_open = bool(
+                    getattr(getattr(getattr(cur_session, "_link", None), "_port", None), "is_open", False)
+                )
                 await stop_device_session(request.app)
+                if was_open and not sim_mode and port_override is None:
+                    # 给 ECB02H2 与 Windows BLE 协议栈短暂回落时间，避免旧连接尚未撤完就撞连
+                    await asyncio.sleep(0.5)
 
-            port_override = getattr(request.app.state, "ble_port_override", None)
             spec = "sim" if sim_mode else f"ble://{addr}"
             try:
                 opened_port = (

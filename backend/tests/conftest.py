@@ -34,6 +34,7 @@ tool = _load_tool()
 os.environ["DB_URL"] = tool.resolve_test_url(tool.read_raw_db_url(), TEST_DB)
 tool.assert_safe_db(os.environ["DB_URL"])
 os.environ["SERIAL_PORT"] = "loop://"
+os.environ["DEV_BENCH_CONTROL"] = "false"
 
 # ② 现在才 import app.config
 from app.config import settings  # noqa: E402

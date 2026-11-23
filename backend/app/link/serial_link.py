@@ -106,7 +106,7 @@ def open_port(
     port_spec: str,
     *,
     baudrate: int = 9600,
-    write_timeout: float = DEFAULT_WRITE_TIMEOUT,
+    write_timeout: float | None = None,
     sim_device: SimulatedDevice | None = None,
 ) -> BytePort:
     """按端口字符串打开低功耗蓝牙 BLE、真串口、loop:// 或模拟器，对外返回同一协议对象。"""
@@ -116,29 +116,31 @@ def open_port(
         return SimBytePort(sim_device if sim_device is not None else SimulatedDevice(periodic_status=True))
     if low.startswith("ble://"):
         from app.config import settings
-        from app.link.ble_link import BleBytePort
+        from app.link.ble_link import DEFAULT_BLE_WRITE_TIMEOUT, BleBytePort
 
         address = spec[6:].strip()
+        ble_wt = DEFAULT_BLE_WRITE_TIMEOUT if write_timeout is None else write_timeout
         return BleBytePort(
             address,
             service_uuid=settings.BLE_SERVICE_UUID,
             notify_uuid=settings.BLE_NOTIFY_UUID,
             write_uuid=settings.BLE_WRITE_UUID,
             mtu_chunk=settings.BLE_MTU_CHUNK,
-            write_timeout=write_timeout,
+            write_timeout=ble_wt,
         )
+    serial_wt = DEFAULT_WRITE_TIMEOUT if write_timeout is None else write_timeout
     if "://" in spec:
         return serial.serial_for_url(
             spec,
             baudrate=baudrate,
             timeout=0,
-            write_timeout=write_timeout,
+            write_timeout=serial_wt,
         )
     return serial.Serial(
         port=spec,
         baudrate=baudrate,
         timeout=0,
-        write_timeout=write_timeout,
+        write_timeout=serial_wt,
     )
 
 
@@ -482,6 +484,7 @@ class SerialLink:
             written = self._port.write(item.payload)
             self._port.flush()
         except (SerialException, OSError) as exc:
+            logger.warning("链路写入失败，转入故障态（%s）：%s", type(exc).__name__, exc)
             # write 已进入内核/驱动，可能部分字节已发到线上，保守记 partial_write
             self._notify_write(
                 item,
@@ -532,6 +535,7 @@ class SerialLink:
                 chunk = self._port.read(64)
             except (SerialException, OSError) as exc:
                 if not self._closing:
+                    logger.warning("链路读取失败，转入故障态（%s）：%s", type(exc).__name__, exc)
                     self._trip_fault(f"serial_read_error:{type(exc).__name__}")
                 return
             if not chunk:
@@ -590,8 +594,9 @@ class SerialLink:
             logger.exception("链路回调执行异常")
 
     def _close_port_quietly(self) -> None:
+        # 始终调用 close()（不以 is_open 门控）：BLE 远端断开后 is_open 已变 False，
+        # 但仍需关闭后台事件循环线程与底层 WinRT/GATT 句柄，避免句柄泄漏阻塞重连。
         try:
-            if self._port.is_open:
-                self._port.close()
+            self._port.close()
         except Exception:
             pass
