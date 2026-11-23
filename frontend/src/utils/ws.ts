@@ -180,7 +180,7 @@ export class DeviceSocket {
           battery: 88,
           voltage: 3.9,
           action: 49,
-          face: 0,
+          face: 5,
           music_state: null,
           track: null,
           volume: null,

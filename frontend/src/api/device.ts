@@ -30,7 +30,7 @@ export function connectBleDevice(address: string, name?: string): Promise<Device
     url: '/devices/ble/connect',
     method: 'post',
     data: { address, ...(name ? { name } : {}) },
-    timeout: 20000,
+    timeout: 40000,
   })
 }
 

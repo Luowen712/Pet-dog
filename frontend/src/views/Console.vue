@@ -1,11 +1,15 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
+import { ArrowRight } from '@element-plus/icons-vue'
 import ActionButton from '@/components/ActionButton.vue'
 import FaceTile from '@/components/FaceTile.vue'
+import RobotDog from '@/components/RobotDog.vue'
 import StateBar from '@/components/StateBar.vue'
 import { ACTION_GROUPS, actionsOf } from '@/constants/actions'
+import type { ActionGroup } from '@/constants/actions'
 import { FACES } from '@/constants/faces'
-import { formatRelative } from '@/utils/format'
+import { describeDeviceStatus } from '@/utils/format'
+import { emitParticleBurst } from '@/utils/theme'
 import { useDeviceStore } from '@/stores/device'
 import { usePetStore } from '@/stores/pet'
 import type { ButtonState } from '@/stores/pet'
@@ -16,42 +20,91 @@ const pet = usePetStore()
 /** 本期只启用七个动作 0x30～0x36，其余按钮保留但禁用 */
 const ENABLED_ACTIONS = new Set([0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36])
 
-const heartbeat = computed(() =>
-  deviceStore.current ? formatRelative(deviceStore.current.last_heartbeat ?? undefined) : '--',
+const POSE_BY_ACTION: Record<number, string> = {
+  0x30: 'pose-sit',
+  0x31: 'pose-stand',
+  0x32: 'pose-lie',
+  0x33: 'pose-forward',
+  0x34: 'pose-backward',
+  0x35: 'pose-left',
+  0x36: 'pose-right',
+}
+
+/** 每个动作分组独立抽屉收纳，默认收起 */
+const openGroups = ref<Set<ActionGroup>>(new Set())
+
+const statusView = computed(() =>
+  describeDeviceStatus({
+    online: pet.online,
+    controlState: pet.controlState,
+  }),
 )
 
+const needsReconnect = computed(() => !pet.online || pet.controlState === 'faulted')
+const allExpanded = computed(() => openGroups.value.size === ACTION_GROUPS.length)
+const activePose = computed(() => {
+  if (!pet.online || pet.action === null) return ''
+  return POSE_BY_ACTION[pet.action] ?? ''
+})
+
+function isGroupOpen(group: ActionGroup): boolean {
+  return openGroups.value.has(group)
+}
+
+function toggleGroup(group: ActionGroup): void {
+  const next = new Set(openGroups.value)
+  if (next.has(group)) next.delete(group)
+  else next.add(group)
+  openGroups.value = next
+}
+
+function toggleAllGroups(): void {
+  openGroups.value = allExpanded.value ? new Set() : new Set(ACTION_GROUPS)
+}
+
 function isEnabled(code: number): boolean {
-  return pet.connected && pet.online && pet.controlState === 'ready' &&
-    ENABLED_ACTIONS.has(code) && !!deviceStore.current?.supported_actions.includes(code)
+  return (
+    pet.connected &&
+    pet.online &&
+    pet.controlState === 'ready' &&
+    ENABLED_ACTIONS.has(code) &&
+    !!deviceStore.current?.supported_actions.includes(code)
+  )
+}
+
+function enabledCount(group: ActionGroup): number {
+  return actionsOf(group).filter((item) => isEnabled(item.code)).length
 }
 
 function stateOf(code: number): ButtonState {
   return pet.status[code] ?? 'idle'
+}
+
+function onFaceClick(faceId: number, event: MouseEvent): void {
+  if (event.clientX > 0) emitParticleBurst(event.clientX, event.clientY, 'oled', 14)
+  void pet.changeFace(faceId)
 }
 </script>
 
 <template>
   <div class="page console">
     <div class="page-head">
-      <div>
-        <div class="page-kicker">03 / Console</div>
+      <div class="head-left">
         <h2 class="page-title">控制台</h2>
-        <p class="page-sub">
-          {{ deviceStore.current?.name ?? '未选择设备' }} · 点一下按钮，桌宠动一下
-        </p>
+        <div v-if="deviceStore.current" class="device-line">
+          <span class="device-name">{{ deviceStore.current.name }}</span>
+          <span class="status" :class="statusView.tone">{{ statusView.label }}</span>
+        </div>
       </div>
-      <div class="legend">
-        <span class="lg"><i class="sw pending" />进行中</span>
-        <span class="lg"><i class="sw ok" />完成 · 1.5s 后熄灭</span>
-        <span class="lg"><i class="sw fail" />未完成 · 5s 后熄灭</span>
-      </div>
+
+      <router-link v-if="deviceStore.current && needsReconnect" to="/devices">
+        <el-button size="small">重连蓝牙</el-button>
+      </router-link>
     </div>
 
     <section v-if="!deviceStore.current" class="card no-device">
       <div class="no-device-body">
-        <span class="mono kicker">NO DEVICE</span>
         <h3>还没有绑定设备</h3>
-        <p>先到设备页扫描并直接连接低功耗蓝牙桌宠，控制台才会连上实时通道。</p>
         <router-link to="/devices">
           <el-button type="primary">去连接蓝牙设备</el-button>
         </router-link>
@@ -59,254 +112,320 @@ function stateOf(code: number): ButtonState {
     </section>
 
     <template v-else>
-    <div class="cols">
-      <div class="col">
+      <StateBar />
+
+      <div class="cols">
         <section class="card">
           <div class="card-head">
             <span class="card-title">动作指令</span>
-            <span class="card-meta">{{ deviceStore.current.supported_actions.filter(isEnabled).length }} 个可用动作</span>
-          </div>
-          <div class="actions">
-            <div v-for="(group, index) in ACTION_GROUPS" :key="group" class="group">
-              <div class="group-title">
-                <span class="mono num">{{ String(index + 1).padStart(2, '0') }}</span>
-                <span>{{ group }}</span>
-                <i class="mono">{{ actionsOf(group).length }}</i>
-              </div>
-              <div class="group-grid">
-                <ActionButton
-                  v-for="action in actionsOf(group)"
-                  :key="action.code"
-                  :action="action"
-                  :state="stateOf(action.code)"
-                  :disabled="!isEnabled(action.code)"
-                  @click="pet.sendAction(action.code)"
-                />
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section class="card">
-          <div class="card-head">
-            <span class="card-title">表情面板</span>
-            <span class="card-meta">07 built-in · click to switch</span>
-          </div>
-          <div class="faces">
-            <button
-              v-for="face in FACES"
-              :key="face.id"
-              type="button"
-              class="face-btn"
-              :class="{ active: pet.face === face.id }"
-              :disabled="!pet.connected || !pet.online || !['ready', 'busy'].includes(pet.controlState)"
-              @click="pet.changeFace(face.id)"
-            >
-              <FaceTile :face="face.id" />
-              <span class="face-meta">
-                <span class="face-name">{{ face.name }}</span>
-                <span class="mono face-id">0{{ face.id }}</span>
-              </span>
+            <button type="button" class="toggle-all" @click="toggleAllGroups">
+              {{ allExpanded ? '全部收起' : '全部展开' }}
             </button>
           </div>
-        </section>
-      </div>
 
-      <div class="col right">
-        <section class="card meta-card">
-          <div class="card-head">
-            <span class="card-title">设备信息</span>
-            <span class="card-meta">Unit 01</span>
-          </div>
-          <div class="meta-list">
-            <div class="meta-row">
-              <span class="mono">Firmware</span>
-              <span class="mono">{{ deviceStore.current?.firmware ?? '--' }}</span>
-            </div>
-            <div class="meta-row">
-              <span class="mono">Control</span>
-              <span class="mono">{{ pet.controlState }}</span>
-            </div>
-            <div class="meta-row">
-              <span class="mono">Heartbeat</span>
-              <span>{{ heartbeat }}</span>
-            </div>
-            <div class="meta-row">
-              <span class="mono">Transport</span>
-              <span class="mono">{{ pet.connected ? 'WS / ws/device' : 'OFFLINE' }}</span>
+          <div class="drawers">
+            <div
+              v-for="group in ACTION_GROUPS"
+              :key="group"
+              class="drawer"
+              :class="{ open: isGroupOpen(group) }"
+            >
+              <button
+                type="button"
+                class="drawer-head"
+                :aria-expanded="isGroupOpen(group)"
+                @click="toggleGroup(group)"
+              >
+                <el-icon class="drawer-arrow"><ArrowRight /></el-icon>
+                <span class="drawer-title">{{ group }}</span>
+                <span class="drawer-meta mono">
+                  <span v-if="enabledCount(group) > 0" class="avail-dot" />
+                  {{ actionsOf(group).length }}
+                </span>
+              </button>
+
+              <div class="drawer-body">
+                <div class="drawer-inner">
+                  <div class="group-grid">
+                    <ActionButton
+                      v-for="action in actionsOf(group)"
+                      :key="action.code"
+                      :action="action"
+                      :state="stateOf(action.code)"
+                      :disabled="!isEnabled(action.code)"
+                      @click="pet.sendAction(action.code)"
+                    />
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </section>
-      </div>
-    </div>
 
-    <StateBar />
+        <div class="right-stack">
+          <section class="card pet-monitor">
+            <RobotDog
+              :face="pet.face"
+              :online="pet.online"
+              :pose="activePose"
+              compact
+              class="monitor-dog"
+            />
+          </section>
+
+          <section class="card">
+            <div class="card-head">
+              <span class="card-title">表情</span>
+              <router-link to="/faces" class="face-lib-link">
+                进入表情库 <span class="mono">↗</span>
+              </router-link>
+            </div>
+            <div class="faces">
+              <button
+                v-for="face in FACES"
+                :key="face.id"
+                type="button"
+                class="face-btn"
+                :class="{ active: pet.face === face.id, sending: pet.switchingFace === face.id }"
+                :disabled="
+                  !pet.connected ||
+                  !pet.online ||
+                  !['ready', 'busy'].includes(pet.controlState) ||
+                  pet.switchingFace !== null
+                "
+                @click="onFaceClick(face.id, $event)"
+              >
+                <FaceTile :face="face.id" />
+                <span class="face-name">{{ face.name }}</span>
+              </button>
+            </div>
+          </section>
+        </div>
+      </div>
     </template>
   </div>
 </template>
 
 <style scoped>
-.legend {
+.head-left {
   display: flex;
   align-items: center;
-  gap: 16px;
-  font-family: var(--mono);
-  font-size: 9px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--faint);
+  gap: 14px;
+  flex-wrap: wrap;
 }
 
-.lg {
+.device-line {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
 }
 
-.sw {
-  width: 7px;
-  height: 7px;
-  display: inline-block;
-  border-radius: 1px;
-}
-
-.sw.pending {
-  background: var(--warn);
-}
-
-.sw.ok {
-  background: var(--ok);
-}
-
-.sw.fail {
-  background: var(--warn);
-  opacity: 0.55;
+.device-name {
+  font-size: 13.5px;
+  color: var(--dim);
 }
 
 .no-device-body {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 10px;
-  padding: 34px 28px;
-}
-
-.no-device-body .kicker {
-  font-size: 9px;
-  letter-spacing: 0.16em;
-  color: var(--faint);
+  gap: 14px;
+  padding: 32px 26px;
 }
 
 .no-device-body h3 {
-  margin: 2px 0 0;
-  font-size: 20px;
-  font-weight: 500;
-}
-
-.no-device-body p {
-  max-width: 520px;
-  margin: 0 0 8px;
-  font-size: 12px;
-  line-height: 1.7;
-  color: var(--dim);
+  font-size: 18px;
+  font-weight: 600;
 }
 
 .cols {
   display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(340px, 1fr);
+  grid-template-columns: minmax(0, 1.35fr) minmax(300px, 1fr);
   gap: 18px;
   align-items: start;
 }
 
-.col {
+.right-stack {
   display: flex;
   flex-direction: column;
   gap: 18px;
-  min-width: 0;
 }
 
-.actions {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-  padding: 16px 20px 20px;
-}
-
-.group-title {
+.pet-monitor {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 9px;
-  font-size: 11px;
+  justify-content: center;
+  padding: 18px 20px 14px;
+  background: var(--bg-stage);
+}
+
+.monitor-dog {
+  max-width: 248px;
+}
+
+.toggle-all,
+.face-lib-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--dim);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.16s ease;
+}
+
+.toggle-all:hover,
+.face-lib-link:hover {
+  color: var(--ink);
+}
+
+.drawers {
+  display: flex;
+  flex-direction: column;
+}
+
+.drawer {
+  border-top: 1px solid var(--hair-soft);
+}
+
+.drawer:first-child {
+  border-top: 0;
+}
+
+.drawer-head {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 15px 20px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--sans);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.16s ease;
+}
+
+.drawer-head:hover {
+  background: var(--surface-2);
+}
+
+.drawer-arrow {
+  font-size: 12px;
+  color: var(--faint);
+  transition:
+    transform 0.24s var(--ease-out),
+    color 0.18s ease;
+}
+
+.drawer.open .drawer-arrow {
+  transform: rotate(90deg);
+  color: var(--accent-1);
+}
+
+.drawer-title {
+  font-size: 13.5px;
   font-weight: 600;
-  letter-spacing: 0.08em;
+}
+
+.drawer-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-left: auto;
+  font-size: 11px;
   color: var(--dim);
 }
 
-.group-title .num {
-  font-size: 8.5px;
-  color: var(--faint);
-  letter-spacing: 0.08em;
+.avail-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ok);
 }
 
-.group-title i {
-  margin-left: auto;
-  font-style: normal;
-  font-size: 8.5px;
-  color: var(--faint);
-  letter-spacing: 0.1em;
+.drawer-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows 0.25s var(--ease-out),
+    opacity 0.2s ease;
 }
 
-.group + .group {
-  padding-top: 16px;
-  border-top: 1px solid var(--hair-soft);
+.drawer.open .drawer-body {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.drawer-inner {
+  overflow: hidden;
 }
 
 .group-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
+  gap: 9px;
+  padding: 4px 20px 18px;
 }
 
 .faces {
+  position: relative;
+  z-index: 1;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 9px;
-  padding: 16px 20px 20px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  padding: 16px 18px 18px;
 }
 
 .face-btn {
   display: flex;
   flex-direction: column;
   gap: 7px;
-  padding: 7px;
-  border: 1px solid var(--hair-soft);
-  border-radius: var(--radius);
-  background: transparent;
+  padding: 8px;
+  border: 1px solid var(--hair);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
   cursor: pointer;
+  text-align: left;
   transition:
-    border-color 0.18s ease,
-    background 0.18s ease;
+    border-color 0.18s var(--ease-out),
+    background-color 0.18s var(--ease-out),
+    transform 0.18s var(--ease-out);
 }
 
-.face-btn:hover {
-  border-color: rgba(20, 20, 20, 0.32);
+.face-btn:hover:not(:disabled) {
+  border-color: var(--hair-strong);
+  transform: translateY(-2px);
 }
 
 .face-btn.active {
-  border-color: var(--ink);
-  background: rgba(255, 255, 255, 0.45);
+  border-color: var(--ok-border);
+  background: var(--ok-soft);
 }
 
-.face-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 2px;
+.face-btn.sending {
+  border-color: var(--warn-border);
+  background: var(--warn-soft);
+}
+
+.face-btn:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
 }
 
 .face-name {
-  font-size: 11.5px;
+  padding: 0 2px;
+  font-size: 12px;
   font-weight: 500;
   color: var(--dim);
 }
@@ -315,74 +434,20 @@ function stateOf(code: number): ButtonState {
   color: var(--ink);
 }
 
-.face-id {
-  font-size: 8.5px;
-  color: var(--faint);
-  letter-spacing: 0.08em;
-}
-
-.meta-list {
-  display: flex;
-  flex-direction: column;
-}
-
-.meta-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 20px;
-  border-top: 1px solid var(--hair-soft);
-  font-size: 12px;
-}
-
-.meta-row:first-child {
-  border-top: 0;
-}
-
-.meta-row .mono:first-child {
-  font-size: 8px;
-  letter-spacing: 0.13em;
-  text-transform: uppercase;
-  color: var(--faint);
-}
-
-.meta-row span:last-child {
-  color: var(--ink);
-  text-align: right;
-}
-
-@media (max-width: 1180px) {
+@media (max-width: 1080px) {
   .cols {
     grid-template-columns: 1fr;
   }
 
-  .right {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    align-items: start;
-  }
-
-  .right :deep(.meta-card) {
-    grid-column: 1 / -1;
+  .faces {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 
-@media (max-width: 760px) {
-  .group-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
+@media (max-width: 720px) {
+  .group-grid,
   .faces {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .right {
-    grid-template-columns: 1fr;
-  }
-
-  .legend {
-    display: none;
   }
 }
 </style>

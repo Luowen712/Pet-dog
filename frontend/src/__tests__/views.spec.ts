@@ -86,7 +86,7 @@ describe('页面冒烟', () => {
     await link!.trigger('click')
     await flushPromises()
     expect(view.text()).toContain('注册账号')
-    expect(view.text()).toContain('Confirm password')
+    expect(view.text()).toContain('确认密码')
     expect(view.text()).toContain('创建账号')
   })
 
@@ -131,6 +131,41 @@ describe('页面冒烟', () => {
     usePetStore().disconnect()
     await flushPromises()
     expect(view.findAll('.action-btn:not(.disabled)')).toHaveLength(0)
+    expect(view.text()).toContain('离线')
+  })
+
+  it('控制台仅展示设备在线状态，动作分组默认收起且支持点击展开与全部展开', async () => {
+    const view = await mountAt('/console')
+    await vi.waitFor(() => expect(view.text()).toContain('在线'))
+    expect(view.text()).not.toContain('网页控制台')
+    expect(view.text()).not.toContain('本地后端')
+
+    // 5 个动作分组默认全部收纳
+    expect(view.findAll('.drawer')).toHaveLength(5)
+    expect(view.findAll('.drawer.open')).toHaveLength(0)
+
+    // 点击第一个分组抽屉展开，再次点击收起
+    const firstHead = view.findAll('.drawer-head')[0]
+    await firstHead.trigger('click')
+    expect(view.findAll('.drawer.open')).toHaveLength(1)
+    await firstHead.trigger('click')
+    expect(view.findAll('.drawer.open')).toHaveLength(0)
+
+    // 支持一键全部展开/收起
+    const toggleAll = view.find('.toggle-all')
+    await toggleAll.trigger('click')
+    expect(view.findAll('.drawer.open')).toHaveLength(5)
+    await toggleAll.trigger('click')
+    expect(view.findAll('.drawer.open')).toHaveLength(0)
+
+    // 设备离线时展示离线与重连蓝牙入口
+    const { usePetStore } = await import('@/stores/pet')
+    const pet = usePetStore()
+    pet.online = false
+    pet.controlState = 'offline'
+    await flushPromises()
+    expect(view.text()).toContain('离线')
+    expect(view.text()).toContain('重连蓝牙')
   })
 
   it('点动作先黄；完成后绿 1.5 秒，然后自动熄灭', async () => {
@@ -167,11 +202,48 @@ describe('页面冒烟', () => {
     expect(view.text()).not.toContain('指令日志')
   })
 
-  it('表情库有 7 张内置表情，没有上传入口', async () => {
-    const view = await mountAt('/faces')
+  it('表情库有 7 张内置表情，没有上传入口，且仅从控制台入口进入', async () => {
+    const view = await mountAt('/console')
+    const navTexts = view.findAll('.nav-item').map((node) => node.text())
+    expect(navTexts).toEqual(['设备', '控制台'])
+
+    const enterLib = view.find('.face-lib-link')
+    expect(enterLib.exists()).toBe(true)
+    expect(enterLib.text()).toContain('进入表情库')
+
+    await router.push('/faces')
+    await flushPromises()
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    await flushPromises()
+
     expect(view.text()).toContain('内置表情')
-    expect(view.findAll('.face-card').length).toBeGreaterThanOrEqual(7)
+    expect(view.text()).toContain('返回控制台')
+    const cards = view.findAll('.face-card')
+    expect(cards.length).toBeGreaterThanOrEqual(7)
     expect(view.text()).not.toContain('上传表情')
+
+    // 等待实时通道就绪后再下发表情
+    await vi.waitFor(() => expect(view.text()).toContain('在线'))
+
+    // 点击卡片可切换大屏预览，点击应用可下发表情（0..6 与固件 DebugUI.c 对齐）
+    expect(cards.map((c) => c.find('.name').text())).toEqual([
+      '睡觉',
+      '委屈',
+      '开心',
+      '狂热',
+      '超开心',
+      '眼睛',
+      '震惊',
+    ])
+    await cards[1].trigger('click')
+    await flushPromises()
+    expect(view.find('.preview-name').text()).toBe('委屈')
+
+    const applyBtn = view.findAll('button').find((b) => b.text().includes('应用到桌宠'))
+    expect(applyBtn).toBeTruthy()
+    await applyBtn!.trigger('click')
+    await flushPromises()
+    await vi.waitFor(() => expect(view.text()).toContain('当前使用'))
   })
 
   it('账号页提供改密、全部退出和注销', async () => {

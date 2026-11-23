@@ -86,6 +86,12 @@ const glowId = `charm-glow-${uid}`
   filter: grayscale(0.5);
 }
 
+.charm.offline .pendant,
+.charm.offline .tail-group,
+.charm.offline .eyes {
+  animation-play-state: paused;
+}
+
 .pendant,
 .tail-group,
 .eyes {

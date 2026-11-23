@@ -1,5 +1,5 @@
 <script setup lang="ts">
-withDefaults(defineProps<{ title: string; hint?: string }>(), { hint: 'EMPTY' })
+withDefaults(defineProps<{ title: string; hint?: string }>(), { hint: '' })
 </script>
 
 <template>
@@ -9,7 +9,7 @@ withDefaults(defineProps<{ title: string; hint?: string }>(), { hint: 'EMPTY' })
       <span class="eye" />
     </div>
     <p class="title">{{ title }}</p>
-    <span class="hint mono">{{ hint }}</span>
+    <span v-if="hint" class="hint">{{ hint }}</span>
   </div>
 </template>
 
@@ -19,8 +19,8 @@ withDefaults(defineProps<{ title: string; hint?: string }>(), { hint: 'EMPTY' })
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 12px;
-  padding: 46px 24px;
+  gap: 10px;
+  padding: 38px 20px;
   text-align: center;
 }
 
@@ -29,29 +29,29 @@ withDefaults(defineProps<{ title: string; hint?: string }>(), { hint: 'EMPTY' })
   align-items: center;
   justify-content: center;
   gap: 10px;
-  width: 64px;
-  height: 24px;
-  border: 1px solid var(--hair);
-  border-radius: 3px;
-  background: rgba(20, 20, 20, 0.02);
+  width: 68px;
+  height: 26px;
+  border: 1px solid var(--oled-screen-border);
+  border-radius: var(--radius-xs);
+  background: var(--oled-bg);
 }
 
 .eye {
-  width: 4px;
-  height: 4px;
+  width: 4.5px;
+  height: 4.5px;
   border-radius: 50%;
-  background: rgba(20, 20, 20, 0.18);
+  background: var(--oled-glow);
+  opacity: 0.72;
 }
 
 .title {
-  font-size: 12.5px;
-  color: var(--dim);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink-2);
 }
 
 .hint {
-  font-size: 8px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--faint);
+  font-size: 12px;
+  color: var(--dim);
 }
 </style>

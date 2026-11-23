@@ -22,7 +22,7 @@ withDefaults(defineProps<{ size?: number }>(), { size: 27 })
 .ring {
   position: absolute;
   inset: 0;
-  padding: calc(var(--s) * 0.092);
+  padding: calc(var(--s) * 0.1);
   border-radius: calc(var(--s) * 0.3);
   background: var(--grad);
   -webkit-mask:
@@ -37,11 +37,12 @@ withDefaults(defineProps<{ size?: number }>(), { size: 27 })
 
 .eye {
   position: absolute;
-  top: calc(var(--s) * 0.44);
-  width: calc(var(--s) * 0.1);
-  height: calc(var(--s) * 0.1);
+  top: calc(var(--s) * 0.43);
+  width: calc(var(--s) * 0.11);
+  height: calc(var(--s) * 0.11);
   border-radius: 50%;
   background: var(--ink);
+  animation: markBlink 5.6s ease-in-out infinite;
 }
 
 .eye-l {
@@ -50,5 +51,16 @@ withDefaults(defineProps<{ size?: number }>(), { size: 27 })
 
 .eye-r {
   right: calc(var(--s) * 0.3);
+}
+
+@keyframes markBlink {
+  0%,
+  92%,
+  100% {
+    transform: scaleY(1);
+  }
+  96% {
+    transform: scaleY(0.15);
+  }
 }
 </style>

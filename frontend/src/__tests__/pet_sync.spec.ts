@@ -219,4 +219,56 @@ describe('pet store 重连对账、unknown 保留与关闭码', () => {
     expect(deviceStore.bleDevices[0].address).toBe('EC:B2:AA:21:9F:AF')
     expect(deviceStore.scanning).toBe(false)
   })
+
+  it('WS 推送 link/state 事件时实时同步 deviceStore 在线态与最后心跳', async () => {
+    const { usePetStore } = await import('@/stores/pet')
+    const { useDeviceStore } = await import('@/stores/device')
+    const pet = usePetStore()
+    const deviceStore = useDeviceStore()
+    deviceStore.bindUser(7)
+    deviceStore.devices = [{
+      id: 1, name: 'Pet', online: false, firmware: '2.0', last_heartbeat: null, battery: null,
+      binding_state: 'bound', control_state: 'offline', supported_actions: [49],
+    }]
+    deviceStore.select(1)
+
+    getDeviceStatusMock.mockResolvedValueOnce(baseStatus({ online: false, control_state: 'offline', battery: null, updated_at: null }))
+    getCommandMock.mockResolvedValue(null)
+    pet.connect(1)
+    const sock = sockets[0]
+    sock.options.onStatus('open')
+    await vi.waitFor(() => expect(pet.controlState).toBe('offline'))
+    expect(deviceStore.devices[0].online).toBe(false)
+
+    // 硬件恢复上线后，link/state 事件立即同步到设备列表卡片
+    sock.options.onEvent({
+      event: 'link',
+      data: {
+        device_id: 1,
+        online: true,
+        control_state: 'ready',
+        reason: null,
+        session_id: 'sid-1',
+        state_revision: 6,
+      },
+    })
+    expect(deviceStore.devices[0].online).toBe(true)
+    expect(deviceStore.devices[0].control_state).toBe('ready')
+    expect(deviceStore.devices[0].last_heartbeat).toBeTruthy()
+
+    // 掉线后同样实时回到离线
+    sock.options.onEvent({
+      event: 'link',
+      data: {
+        device_id: 1,
+        online: false,
+        control_state: 'offline',
+        reason: 'uplink_timeout',
+        session_id: 'sid-1',
+        state_revision: 7,
+      },
+    })
+    expect(deviceStore.devices[0].online).toBe(false)
+    expect(deviceStore.devices[0].control_state).toBe('offline')
+  })
 })
