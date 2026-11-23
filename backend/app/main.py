@@ -28,7 +28,7 @@ from app.resp import ok
 from app.routers import auth, control, devices, faces, setup
 from app.services.events import Events
 from app.services.control import ReceiptWriter
-from app.link.device_session import SUPPORTED_CORE_ACTIONS
+from app.link.device_session import SUPPORTED_ALL_ACTIONS, SUPPORTED_CORE_ACTIONS
 from app.services.purge import purge_revoking
 
 logger = logging.getLogger(__name__)
@@ -95,6 +95,7 @@ async def _session_maintenance_loop(
     *,
     heartbeat_interval: float = HEARTBEAT_INTERVAL_SEC,
     check_interval: float = 1.0,
+    on_faulted=None,
 ) -> None:
     """后台调度任务（06:219 每 3 秒发 04 心跳；06 第 12.1 节 9 秒无上行判 offline）。
 
@@ -112,12 +113,12 @@ async def _session_maintenance_loop(
             try:
                 now = loop.time()
                 if session.control_state == "faulted":
-                    return
+                    break
                 if (now - last_hb) >= heartbeat_interval:
                     try:
                         session.send_heartbeat()
                     except LinkClosedError:
-                        return
+                        break
                     except Exception:
                         logger.exception("后台心跳入队异常")
                     last_hb = now
@@ -127,7 +128,7 @@ async def _session_maintenance_loop(
                     try:
                         session.poll_status()
                     except LinkClosedError:
-                        return
+                        break
                     except Exception:
                         logger.exception("后台首帧催状态异常")
                 try:
@@ -140,8 +141,69 @@ async def _session_maintenance_loop(
             except Exception:
                 logger.exception("后台会话维护循环捕获未预期异常，继续下一轮")
             await asyncio.sleep(step)
+        if on_faulted is not None and session.control_state == "faulted":
+            on_faulted()
     except asyncio.CancelledError:
         return
+
+
+# BLE 链路掉线（舵机动作拉低供电导致模块复位、超出距离等）只会表现为读写异常；
+# 这类故障自动按退避重连并新建会话（旧未终结命令按 session_restart 置 unknown，绝不重发）。
+# DB 锁丢失、回执落库失败等仍保持 faulted，不做透明重连（N07）。
+_BLE_LINK_LOSS = ("serial_read_error", "serial_write_error")
+_BLE_RECONNECT_DELAYS = (1.0, 2.0, 3.0, 5.0, 5.0, 10.0, 10.0, 10.0, 15.0, 15.0)
+
+
+def _schedule_ble_reconnect(app: FastAPI, session: DeviceSession, address: str) -> None:
+    if not (session.fault_reason or "").startswith(_BLE_LINK_LOSS):
+        return
+    old = getattr(app.state, "reconnect_task", None)
+    if old is not None and not old.done():
+        return
+    app.state.reconnect_task = asyncio.create_task(
+        _reconnect_ble(app, session, address), name="petdog-ble-reconnect"
+    )
+
+
+async def _reconnect_ble(app: FastAPI, session: DeviceSession, address: str) -> None:
+    delays = getattr(app.state, "ble_reconnect_delays", _BLE_RECONNECT_DELAYS)
+    port_override = getattr(app.state, "ble_port_override", None)
+    for n, delay in enumerate(delays, 1):
+        await asyncio.sleep(delay)
+        if getattr(app.state, "device_session", None) is not session:
+            return
+        try:
+            port = (
+                port_override(address)
+                if callable(port_override)
+                else await asyncio.to_thread(
+                    open_port, f"ble://{address}", baudrate=settings.SERIAL_BAUD
+                )
+            )
+        except (SerialException, OSError) as exc:
+            logger.warning("BLE 自动重连第 %d 次失败：%s", n, exc)
+            continue
+
+        async with app.state.session_lock:
+            # 期间用户手动重连、解绑或注销都会替换会话或递增 be，此时关掉刚开的端口并退出
+            with SessionLocal() as db:
+                dev = db.get(Device, session.device_pk)
+                still_valid = (
+                    dev is not None
+                    and dev.status == "bound"
+                    and dev.be == session.be
+                    and getattr(app.state, "device_session", None) is session
+                )
+            if not still_valid:
+                await asyncio.to_thread(port.close)
+                return
+            new = await start_device_session(app, session.device_pk, port=port, is_sim=False)
+            logger.warning("BLE 已自动重连：%s", address)
+            receipts = getattr(app.state, "receipts", None)
+            if new is not None and receipts is not None:
+                receipts.publish_link(new, new.session_id, new.be)
+            return
+    logger.warning("BLE 自动重连多次失败，请检查桌宠供电后在设备页手动重连")
 
 
 async def stop_device_session(app: FastAPI) -> None:
@@ -175,6 +237,10 @@ async def stop_ble_session_if_matching(app: FastAPI, device_pks: set[int]) -> No
             and sess.device_pk in device_pks
             and isinstance(getattr(sess._link, "_port", None), BleBytePort)
         ):
+            reconnect_task = getattr(app.state, "reconnect_task", None)
+            app.state.reconnect_task = None
+            if reconnect_task is not None and not reconnect_task.done():
+                reconnect_task.cancel()
             await stop_device_session(app)
 
     session_lock = getattr(app.state, "session_lock", None)
@@ -223,7 +289,8 @@ async def start_device_session(
         send_gate=send_gate,
         min_frame_gap=getattr(app.state, "min_frame_gap_sec", 0.02),
     )
-    # 真实硬件（含 BLE 实板）在完成动作时序验收前不开放运动。
+    # 真实硬件默认在完成动作时序验收前不开放运动；本地联调开 DEV_BENCH_CONTROL=True 放开。
+    bench_mode = settings.DEV_BENCH_CONTROL and not sim_mode
     session = DeviceSession(
         device_pk,
         SessionLocal,
@@ -233,8 +300,13 @@ async def start_device_session(
         loop=loop,
         prepared_marker=getattr(app.state, "prepared_marker", None),
         on_event=(lambda event: receipts.on_event(session, event)) if receipts is not None else None,
-        supported_actions=SUPPORTED_CORE_ACTIONS if sim_mode else (),
-        auto_prepare_sim=sim_mode or port_override is not None,
+        supported_actions=(
+            SUPPORTED_ALL_ACTIONS
+            if bench_mode
+            else (SUPPORTED_CORE_ACTIONS if sim_mode else ())
+        ),
+        auto_prepare_sim=sim_mode or bench_mode or port_override is not None,
+        bench_mode=bench_mode,
     )
     try:
         await asyncio.to_thread(session.start)
@@ -246,11 +318,15 @@ async def start_device_session(
 
     hb_interval = float(getattr(app.state, "heartbeat_interval_sec", HEARTBEAT_INTERVAL_SEC))
     chk_interval = float(getattr(app.state, "timeout_check_interval_sec", 1.0))
+    from app.link.ble_link import BleBytePort
+
+    ble_addr = port.address if isinstance(port, BleBytePort) else None
     app.state.ticker_task = asyncio.create_task(
         _session_maintenance_loop(
             session,
             heartbeat_interval=hb_interval,
             check_interval=chk_interval,
+            on_faulted=(lambda: _schedule_ble_reconnect(app, session, ble_addr)) if ble_addr else None,
         ),
         name="petdog-session-ticker",
     )
@@ -284,6 +360,7 @@ async def lifespan(app: FastAPI):
     app.state.device_session = None
     app.state.device_session_error = None
     app.state.ticker_task = None
+    app.state.reconnect_task = None
     app.state.session_lock = asyncio.Lock()
 
     events = app.state.events = Events(asyncio.get_running_loop())
@@ -316,6 +393,10 @@ async def lifespan(app: FastAPI):
 
         yield
     finally:
+        reconnect_task = getattr(app.state, "reconnect_task", None)
+        if reconnect_task is not None:
+            reconnect_task.cancel()
+            await asyncio.gather(reconnect_task, return_exceptions=True)
         await stop_device_session(app)
         unsubscribe()
         await asyncio.to_thread(receipts.pool.shutdown, wait=True)

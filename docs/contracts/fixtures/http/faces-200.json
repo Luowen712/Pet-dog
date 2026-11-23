@@ -12,43 +12,43 @@
     "data": [
       {
         "id": 0,
-        "name": "普通",
+        "name": "睡觉",
         "builtin": true,
         "preview": null
       },
       {
         "id": 1,
-        "name": "开心",
+        "name": "委屈",
         "builtin": true,
         "preview": null
       },
       {
         "id": 2,
-        "name": "困倦",
+        "name": "开心",
         "builtin": true,
         "preview": null
       },
       {
         "id": 3,
-        "name": "生气",
+        "name": "狂热",
         "builtin": true,
         "preview": null
       },
       {
         "id": 4,
-        "name": "惊讶",
+        "name": "超开心",
         "builtin": true,
         "preview": null
       },
       {
         "id": 5,
-        "name": "伤心",
+        "name": "眼睛",
         "builtin": true,
         "preview": null
       },
       {
         "id": 6,
-        "name": "卖萌",
+        "name": "震惊",
         "builtin": true,
         "preview": null
       }

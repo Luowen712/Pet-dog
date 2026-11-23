@@ -611,7 +611,9 @@ def test_late_frames_recorded_as_orphan_and_heartbeat_ack_no_echo():
         port.inject_rx(build(CMD_DONE, bytes([0x31, 99])))
         port.inject_rx(build(CMD_REJECT, bytes([0x04, 99])))
         assert _wait_until(lambda: sess.orphan_frames == 3)
-        assert [e.kind for e in events] == ["orphan", "orphan", "orphan"]
+        # 首次 0x84 触发 offline→online 推 1 条 link 事件，第 2 条 0x84 不重复推送，随后 3 条迟到帧为 orphan
+        assert [e.kind for e in events] == ["link", "orphan", "orphan", "orphan"]
+        assert events[0].payload["online"] is True
     finally:
         sess.close()
 

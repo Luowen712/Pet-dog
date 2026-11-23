@@ -456,3 +456,380 @@ def test_ble_connect_rejects_hijacking_other_users_active_session_and_closes_on_
 
     with SessionLocal() as db:
         assert db.query(Device).filter_by(device_id=addr2).first() is None
+
+
+def test_ble_connect_timeout_releases_backend_handles_and_stops_thread():
+    import asyncio
+
+    closed_handles: list[str] = []
+
+    class _FakeWinRTHandle:
+        def __init__(self, label: str):
+            self.label = label
+
+        def close(self):
+            closed_handles.append(self.label)
+
+    class _HangingClient(_FakeBleakClient):
+        def __init__(self, address: str, **kw):
+            super().__init__(address, **kw)
+            self.disconnect_calls = 0
+            self._backend = SimpleNamespace(
+                _session=_FakeWinRTHandle("session"),
+                _requester=_FakeWinRTHandle("requester"),
+            )
+
+        async def connect(self):
+            await asyncio.sleep(5.0)
+
+        async def disconnect(self):
+            self.disconnect_calls += 1
+
+    holder: dict[str, _HangingClient] = {}
+
+    def make_client(addr, **kw):
+        c = _HangingClient(addr, **kw)
+        holder["c"] = c
+        return c
+
+    with pytest.raises(SerialTimeoutException, match="BLE 建连超时"):
+        BleBytePort(
+            "AA:BB:CC:DD:EE:88",
+            connect_timeout=0.15,
+            client_factory=make_client,
+        )
+
+    assert holder["c"].disconnect_calls >= 1
+    assert set(closed_handles) == {"session", "requester"}
+
+
+def test_serial_link_closes_ble_port_thread_after_remote_disconnect():
+    from app.link.serial_link import SerialLink
+
+    holder: dict[str, _FakeBleakClient] = {}
+
+    class _CountingClient(_FakeBleakClient):
+        def __init__(self, address: str, **kw):
+            super().__init__(address, **kw)
+            self.disconnect_calls = 0
+
+        async def disconnect(self):
+            self.disconnect_calls += 1
+            self.is_connected = False
+
+    def make_client(addr, **kw):
+        c = _CountingClient(addr, **kw)
+        holder["c"] = c
+        return c
+
+    port = BleBytePort("AA:BB:CC:DD:EE:77", client_factory=make_client)
+    link = SerialLink(port, poll_interval=0.005)
+    link.start()
+    try:
+        # 远端断开使 port.is_open 立即变 False，SerialLink 仍必须调 port.close() 释放线程与底层句柄
+        holder["c"].trigger_disconnect()
+        for _ in range(100):
+            if link.faulted and not port._thread.is_alive():
+                break
+            time.sleep(0.02)
+        assert link.faulted is True
+        assert port._thread.is_alive() is False
+        assert holder["c"].disconnect_calls >= 1
+    finally:
+        link.close()
+
+
+def test_heartbeat_ack_emits_link_event_when_device_comes_online(tmp_path):
+    from app.link.device_session import DeviceSession
+    from app.link.frame import build
+    from app.link.serial_link import SerialLink
+    from app.link.simulator import CMD_HEARTBEAT_ACK
+
+    with SessionLocal() as db:
+        u, _ = _mk_user(db, "hb")
+        dev = Device(
+            device_id=f"HB-{uuid.uuid4().hex[:8]}",
+            name="HB-Test",
+            owner_id=u.id,
+            status="bound",
+            handover_state="ready",
+            be=1,
+        )
+        db.add(dev)
+        db.commit()
+        dev_pk = dev.id
+
+    holder: dict[str, _FakeBleakClient] = {}
+
+    def make_client(addr, **kw):
+        c = _FakeBleakClient(addr, **kw)
+        holder["c"] = c
+        return c
+
+    events = []
+    port = BleBytePort("AA:BB:CC:DD:EE:66", client_factory=make_client)
+    link = SerialLink(port, poll_interval=0.005)
+    session = DeviceSession(
+        dev_pk,
+        SessionLocal,
+        link,
+        auto_prepare_sim=True,
+        on_event=events.append,
+    )
+    session.start()
+    try:
+        assert session.online is False
+        holder["c"].push_notify(build(CMD_HEARTBEAT_ACK))
+        for _ in range(100):
+            if any(ev.kind == "link" and ev.payload.get("online") is True for ev in events):
+                break
+            time.sleep(0.02)
+        link_events = [ev for ev in events if ev.kind == "link"]
+        assert len(link_events) == 1
+        assert link_events[0].payload["online"] is True
+
+        # 已在线时再次收到 0x84 不重复推送冗余 link 事件
+        holder["c"].push_notify(build(CMD_HEARTBEAT_ACK))
+        time.sleep(0.05)
+        assert len([ev for ev in events if ev.kind == "link"]) == 1
+    finally:
+        session.close()
+
+
+def test_ble_bench_mode_unlocks_all_actions_and_faces(monkeypatch, tmp_path):
+    with SessionLocal() as db:
+        _, h = _mk_user(db, "ble_bench")
+
+    holder: dict[str, _FakeBleakClient] = {}
+
+    def make_ble_port(addr: str) -> BleBytePort:
+        def make_client(a, **kw):
+            c = _FakeBleakClient(a, **kw)
+            holder["c"] = c
+            return c
+
+        return BleBytePort(addr, client_factory=make_client)
+
+    monkeypatch.setattr(settings, "SERIAL_PORT", "ble")
+    monkeypatch.setattr(settings, "SERIAL_DEVICE_PK", None)
+    monkeypatch.setattr(settings, "DEV_BENCH_CONTROL", True)
+    for k, v in dict(
+        host_lock_path=tmp_path / "ble-bench.lock",
+        db_lock_name=f"petdog:test:bench:{uuid.uuid4().hex[:8]}",
+        ble_port_override=make_ble_port,
+        heartbeat_interval_sec=60.0,
+        timeout_check_interval_sec=0.05,
+    ).items():
+        monkeypatch.setattr(app.state, k, v, raising=False)
+
+    addr = f"BC:01:{uuid.uuid4().hex[:2].upper()}:11:22:33"
+    with TestClient(app) as client:
+        conn = client.post(
+            "/api/devices/ble/connect",
+            json={"address": addr, "name": "BenchDog"},
+            headers=h,
+        ).json()
+        assert conn["code"] == 0
+        dev_pk = conn["data"]["id"]
+        assert conn["data"]["online"] is True
+        assert conn["data"]["control_state"] == "ready"
+        assert len(conn["data"]["supported_actions"]) == 19
+        assert 0x43 in conn["data"]["supported_actions"]
+
+        # GET /api/faces 返回与固件 DebugUI.c 对齐的 0..6 表情表
+        faces_resp = client.get("/api/faces", headers=h).json()
+        assert faces_resp["code"] == 0
+        assert [(f["id"], f["name"]) for f in faces_resp["data"]] == [
+            (0, "睡觉"),
+            (1, "委屈"),
+            (2, "开心"),
+            (3, "狂热"),
+            (4, "超开心"),
+            (5, "眼睛"),
+            (6, "震惊"),
+        ]
+
+        # 无需下位机先回 0x03/0x84，直接能下发动作（如 0x43 打招呼）和表情
+        r_face = client.post(
+            "/api/faces/current",
+            json={"device_id": dev_pk, "face": 1},
+            headers=h,
+        ).json()
+        assert r_face["code"] == 0 and r_face["data"]["dispatched"] is True
+
+        r_cmd1 = client.post(
+            "/api/commands/send",
+            json={"device_id": dev_pk, "action": 0x43},
+            headers={**h, "Idempotency-Key": str(uuid.uuid4())},
+        ).json()
+        assert r_cmd1["code"] == 0 and r_cmd1["data"]["status"] == "pending"
+
+        # 即使下位机未回 0x81，600ms 超时后释放槽回到 ready，可继续连测下一条动作
+        for _ in range(50):
+            st = client.get(f"/api/devices/{dev_pk}/status", headers=h).json()["data"]
+            if st["control_state"] == "ready":
+                break
+            time.sleep(0.04)
+        assert st["control_state"] == "ready"
+
+        r_cmd2 = client.post(
+            "/api/commands/send",
+            json={"device_id": dev_pk, "action": 0x31},
+            headers={**h, "Idempotency-Key": str(uuid.uuid4())},
+        ).json()
+        assert r_cmd2["code"] == 0 and r_cmd2["data"]["seq"] == 2
+        assert len(holder["c"].written) >= 3
+
+
+def test_ble_write_timeout_tolerates_wireless_jitter_without_faulting(monkeypatch):
+    import asyncio
+    from app.link import ble_link
+    from app.link.ble_link import DEFAULT_BLE_WRITE_TIMEOUT
+    from app.link.frame import build
+    from app.link.serial_link import (
+        DEFAULT_WRITE_TIMEOUT,
+        SerialLink,
+        TRANSPORT_OK,
+        open_port,
+    )
+    from app.link.simulator import CMD_HEARTBEAT_REQ
+
+    class _SlowWriteClient(_FakeBleakClient):
+        async def write_gatt_char(self, uuid_str: str, data: bytes, response: bool = False):
+            # 模拟 Windows BLE 空口写抖动（350ms > 有线串口 200ms，但 < BLE 默认 3s）
+            await asyncio.sleep(0.35)
+            await super().write_gatt_char(uuid_str, data, response=response)
+
+    port = BleBytePort("AA:BB:CC:DD:EE:55", client_factory=lambda a, **kw: _SlowWriteClient(a, **kw))
+    assert port._write_timeout == DEFAULT_BLE_WRITE_TIMEOUT >= 2.0
+    outcomes = []
+    link = SerialLink(port, poll_interval=0.005)
+    link.start()
+    try:
+        link.enqueue_heartbeat(build(CMD_HEARTBEAT_REQ), on_done=outcomes.append)
+        for _ in range(100):
+            if outcomes:
+                break
+            time.sleep(0.02)
+        assert len(outcomes) == 1
+        assert outcomes[0].transport == TRANSPORT_OK
+        assert link.faulted is False
+    finally:
+        link.close()
+
+    # open_port("ble://...") 默认用 BLE 写超时（3s），有线/loop:// 维持 200ms
+    captured: dict[str, float] = {}
+
+    class _CaptureBlePort:
+        def __init__(self, _addr: str, **kw):
+            captured["ble_wt"] = kw["write_timeout"]
+
+    monkeypatch.setattr(ble_link, "BleBytePort", _CaptureBlePort)
+    open_port("ble://AA:BB:CC:DD:EE:56")
+    assert captured["ble_wt"] == DEFAULT_BLE_WRITE_TIMEOUT
+
+    loop_port = open_port("loop://")
+    try:
+        assert loop_port.write_timeout == DEFAULT_WRITE_TIMEOUT
+    finally:
+        loop_port.close()
+
+
+def test_ble_write_hard_timeout_raises_and_cached_device_error_falls_back(monkeypatch):
+    import asyncio
+    from app.link import ble_link
+
+    class _HungWriteClient(_FakeBleakClient):
+        async def write_gatt_char(self, uuid_str: str, data: bytes, response: bool = False):
+            await asyncio.sleep(5.0)
+
+    port = BleBytePort(
+        "AA:BB:CC:DD:EE:57",
+        write_timeout=0.1,
+        client_factory=lambda a, **kw: _HungWriteClient(a, **kw),
+    )
+    try:
+        with pytest.raises(SerialTimeoutException, match="BLE 写入超时"):
+            port.write(b"\xAA\x55\x00\x04\xFB")
+    finally:
+        port.close()
+
+    # 缓存对象快速报错（如 OSError / BleakError）时应清缓存并回落按地址重连
+    addr = "AA:BB:CC:DD:EE:58"
+    cached_obj = SimpleNamespace(address=addr)
+    ble_link._cache_ble_device(addr, cached_obj)
+    targets: list[object] = []
+
+    class _FallbackClient(_FakeBleakClient):
+        def __init__(self, target, **kw):
+            targets.append(target)
+            super().__init__(addr, **kw)
+            self._fail = target is cached_obj
+
+        async def connect(self):
+            if self._fail:
+                raise OSError("stale WinRT handle")
+            await super().connect()
+
+    monkeypatch.setattr(ble_link, "_import_bleak", lambda: (_FallbackClient, None))
+    p2 = BleBytePort(addr)
+    try:
+        assert p2.is_open is True
+        assert targets == [cached_obj, addr]
+        assert ble_link._get_cached_ble_device(addr) is None
+    finally:
+        p2.close()
+
+
+def test_ble_link_drop_during_motion_auto_reconnects_session(monkeypatch, tmp_path):
+    with SessionLocal() as db:
+        _, h = _mk_user(db, "ble_autoreconn")
+
+    clients: list[_FakeBleakClient] = []
+
+    def make_ble_port(addr: str) -> BleBytePort:
+        def make_client(a, **kw):
+            c = _FakeBleakClient(a, **kw)
+            clients.append(c)
+            return c
+
+        return BleBytePort(addr, client_factory=make_client)
+
+    monkeypatch.setattr(settings, "SERIAL_PORT", "ble")
+    monkeypatch.setattr(settings, "SERIAL_DEVICE_PK", None)
+    monkeypatch.setattr(settings, "DEV_BENCH_CONTROL", True)
+    for k, v in dict(
+        host_lock_path=tmp_path / "ble-autoreconn.lock",
+        db_lock_name=f"petdog:test:autoreconn:{uuid.uuid4().hex[:8]}",
+        ble_port_override=make_ble_port,
+        ble_reconnect_delays=(0.05, 0.05),
+        heartbeat_interval_sec=60.0,
+        timeout_check_interval_sec=0.02,
+    ).items():
+        monkeypatch.setattr(app.state, k, v, raising=False)
+
+    addr = f"BD:02:{uuid.uuid4().hex[:2].upper()}:11:22:33"
+    with TestClient(app) as client:
+        conn = client.post(
+            "/api/devices/ble/connect",
+            json={"address": addr, "name": "BrownoutDog"},
+            headers=h,
+        ).json()
+        assert conn["code"] == 0
+        dev_pk = conn["data"]["id"]
+        first_sid = app.state.device_session.session_id
+        assert len(clients) == 1
+
+        # 模拟舵机动作过程中供电跌落导致 BLE 模块瞬断复位
+        clients[0].trigger_disconnect()
+
+        # 后台应自动重连并开启新会话，恢复 ready
+        for _ in range(100):
+            st = client.get(f"/api/devices/{dev_pk}/status", headers=h).json()["data"]
+            if len(clients) >= 2 and st["control_state"] == "ready" and st["session_id"] != first_sid:
+                break
+            time.sleep(0.03)
+        assert len(clients) >= 2
+        assert st["online"] is True
+        assert st["control_state"] == "ready"
+        assert st["session_id"] != first_sid

@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     JWT_EXPIRE_HOURS: int = 24
     ONLINE_TTL_SEC: int = 30
     DEV_HEARTBEAT: bool = False
+    # 开发期人工监护联调开关：放开实板 BLE/串口的全部 19 个动作与 7 个表情，
+    # 链路打开即视为 ready，未收到回包超时释放槽不锁死（正式环境必须为 False）
+    DEV_BENCH_CONTROL: bool = False
 
 
 settings = Settings()

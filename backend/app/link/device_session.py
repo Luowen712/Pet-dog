@@ -36,7 +36,9 @@ from app.link.send_gate import RevokeEvent, SendGate
 from app.link.serial_link import (
     BeforeWriteHook,
     LinkClosedError,
+    QueueFullError,
     SerialLink,
+    TRANSPORT_OK,
     TRANSPORT_PARTIAL_WRITE,
     TRANSPORT_WRITE_FAILED,
     WriteCallback,
@@ -73,6 +75,10 @@ UPLINK_TIMEOUT_SEC = 9.0  # 06 第 12.1 节：9 秒无有效上行即 offline
 POLL_MIN_INTERVAL_SEC = 1.0  # 06 第 12.2 节：同一设备两次 06 至少间隔 1 秒
 
 SUPPORTED_CORE_ACTIONS: tuple[int, ...] = (0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36)
+SUPPORTED_ALL_ACTIONS: tuple[int, ...] = (
+    0x29, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36,
+    0x37, 0x38, 0x39, 0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x48, 0x49,
+)
 
 
 class SessionError(Exception):
@@ -171,6 +177,7 @@ class DeviceSession:
         loop: asyncio.AbstractEventLoop | None = None,
         prepared_marker: tuple[int, str | None] | None = None,
         auto_prepare_sim: bool = False,
+        bench_mode: bool = False,
         on_event: EventCallback | None = None,
         supported_actions: tuple[int, ...] = SUPPORTED_CORE_ACTIONS,
     ) -> None:
@@ -183,6 +190,7 @@ class DeviceSession:
         self._loop = loop
         self._prepared_marker = prepared_marker
         self._auto_prepare_sim = auto_prepare_sim
+        self._bench_mode = bench_mode
         self._on_event = on_event
         self._supported_actions = tuple(supported_actions)
 
@@ -207,6 +215,7 @@ class DeviceSession:
         # 与全后端（models.py / devices.py / presence.py）统一采用本地 naive datetime
         self._last_heartbeat: datetime | None = None
         self._last_poll_sent_at: float | None = None
+        self._poll_timer: threading.Timer | None = None
 
         # 0x03 缓存字段：未知一律 None，绝不回填 0（06:44）
         self._state_revision: int = 0
@@ -259,6 +268,11 @@ class DeviceSession:
     def online(self) -> bool:
         with self._mu:
             return self._online
+
+    @property
+    def fault_reason(self) -> str | None:
+        with self._mu:
+            return self._fault_reason or self._link.fault_reason
 
     @property
     def pending_seqs(self) -> dict[int, PendingSlot]:
@@ -442,6 +456,12 @@ class DeviceSession:
             self._recovery_required = recovery_required
             self._session_record_id = new_rec_id
             self.recovered_unknown_commands = recovered_count
+            if self._bench_mode and not handover_required:
+                # 人工监护联调模式：链路已打开即置在线就绪，方便无上行回包时直接测下行帧
+                self._online = True
+                self._snapshot_received = True
+                self._last_uplink = self._clock.monotonic()
+                self._last_heartbeat = datetime.now()
 
             self._link.set_callbacks(
                 on_frame=self._on_frame,
@@ -460,6 +480,7 @@ class DeviceSession:
         """关闭顺序（BA02 第 5 条）：先拒新操作 → 停写等在途退出并关串口 → 关闭会话记录。"""
         with self._mu:
             self._closing = True
+            self._cancel_poll_timer_locked()
             unreg = self._unregister_revoke
             self._unregister_revoke = None
 
@@ -621,12 +642,65 @@ class DeviceSession:
                 raise SessionNotReadyError(
                     state, f"设备当前状态为 {state}，不能设置表情"
                 )
+            def _after_face_write(outcome: WriteOutcome) -> None:
+                if outcome.transport == TRANSPORT_OK:
+                    self._request_status_poll_after_face()
+                if on_write is not None:
+                    on_write(outcome)
+
             self._link.enqueue(
                 build(CMD_FACE, bytes([face])),
                 before_write=before_write,
-                on_done=on_write,
+                on_done=_after_face_write,
                 require_send_gate=True,
             )
+
+    def _cancel_poll_timer_locked(self) -> None:
+        timer = self._poll_timer
+        self._poll_timer = None
+        if timer is not None:
+            timer.cancel()
+
+    def _request_status_poll_after_face(self) -> None:
+        """0x07 写线成功后立即催一次 0x06 拉新表情，避免网页苦等 5 秒周期；
+        若仍在 1 秒冷却窗内则合并调度一次延迟 0x06，遵守 06 第 12.2 节。"""
+        with self._mu:
+            if self._closing or self._faulted:
+                return
+            now = self._clock.monotonic()
+            if (
+                self._last_poll_sent_at is None
+                or (now - self._last_poll_sent_at) >= POLL_MIN_INTERVAL_SEC
+            ):
+                try:
+                    self._link.enqueue(
+                        build(CMD_POLL_STATUS),
+                        require_send_gate=False,
+                    )
+                    self._last_poll_sent_at = now
+                    self._cancel_poll_timer_locked()
+                except (LinkClosedError, QueueFullError):
+                    pass
+                return
+            if self._poll_timer is None:
+                delay = max(
+                    0.05,
+                    POLL_MIN_INTERVAL_SEC - (now - self._last_poll_sent_at) + 0.03,
+                )
+                timer = threading.Timer(delay, self._on_deferred_poll_timer)
+                timer.daemon = True
+                self._poll_timer = timer
+                timer.start()
+
+    def _on_deferred_poll_timer(self) -> None:
+        with self._mu:
+            self._poll_timer = None
+            if self._closing or self._faulted:
+                return
+            try:
+                self.poll_status()
+            except (LinkClosedError, QueueFullError):
+                pass
 
     def send_heartbeat(self, *, on_write: WriteCallback | None = None) -> bool:
         """入队 0x04 心跳请求（合并且优先于用户写）。"""
@@ -659,10 +733,13 @@ class DeviceSession:
     def check_command_timeout(self) -> None:
         with self._mu:
             now = self._clock.monotonic()
-            for seq, slot in self._pending.items():
+            for seq, slot in list(self._pending.items()):
                 if slot.deadline is not None and now >= slot.deadline:
-                    self._pending[seq] = replace(slot, uncertain=True, deadline=None)
-                    self._recovery_required = True
+                    if self._bench_mode:
+                        self._pending.pop(seq, None)
+                    else:
+                        self._pending[seq] = replace(slot, uncertain=True, deadline=None)
+                        self._recovery_required = True
                     self._state_revision += 1
                     self._emit(SessionEvent('unknown', self._session_id, now, {
                         'cmd_id': slot.cmd_id, 'seq': seq,
@@ -684,6 +761,8 @@ class DeviceSession:
         affected_cmd_ids: list[str] = []
         closed_rec_id: int | None = None
         with self._mu:
+            if self._bench_mode:
+                return False
             if not self._online or self._last_uplink is None:
                 return False
             now = self._clock.monotonic()
@@ -739,16 +818,34 @@ class DeviceSession:
 
         event: SessionEvent | None = None
         with self._mu:
+            was_online = self._online
+            prev_ctrl = self.control_state
             # 06 第 12.1 节：任一设备→主机有效完整帧均刷新 last_uplink 与 last_heartbeat
             self._last_uplink = received_at
             self._last_heartbeat = datetime.now()
             self._online = True
 
             if frame.cmd == CMD_HEARTBEAT_ACK:
-                # 06:220 / N17：收到 0x84 只刷新上行，绝不回发 0x04
-                return
-
-            if frame.cmd == CMD_STATUS:
+                # 06:220 / N17：收到 0x84 只刷新上行，绝不回发 0x04；
+                # 若此次心跳使在线/控制状态发生变化，推一次 link 事件让前端实时点亮在线状态。
+                if not was_online or self.control_state != prev_ctrl:
+                    self._state_revision += 1
+                    event = SessionEvent(
+                        kind="link",
+                        session_id=self._session_id,
+                        received_at=received_at,
+                        payload={
+                            "device_id": self._device_pk,
+                            "online": self._online,
+                            "control_state": self.control_state,
+                            "reason": None,
+                            "session_id": self._session_id,
+                            "state_revision": self._state_revision,
+                        },
+                    )
+                else:
+                    return
+            elif frame.cmd == CMD_STATUS:
                 event = self._handle_status_locked(frame.data, received_at)
             elif frame.cmd == CMD_ACCEPTED:
                 event = self._handle_accepted_locked(frame.data, received_at)
@@ -1044,6 +1141,7 @@ class DeviceSession:
         self._temp = None
 
     def _on_link_fault(self, reason: str) -> None:
+        logger.warning("设备会话进入故障态：device_pk=%s reason=%s", self._device_pk, reason)
         self._enter_fault(reason)
         self._emit(
             SessionEvent(
@@ -1075,6 +1173,7 @@ class DeviceSession:
 
     def _enter_fault(self, reason: str) -> None:
         with self._mu:
+            self._cancel_poll_timer_locked()
             if not self._faulted:
                 self._faulted = True
                 self._fault_reason = reason
