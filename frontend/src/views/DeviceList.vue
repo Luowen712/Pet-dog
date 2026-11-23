@@ -4,9 +4,15 @@ import { useRouter } from 'vue-router'
 import { EditPen, Link, Refresh, SwitchButton } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import EmptyState from '@/components/EmptyState.vue'
-import PetCharm from '@/components/PetCharm.vue'
-import type { Device } from '@/types'
-import { formatDateTime, formatRelative } from '@/utils/format'
+import FaceTile from '@/components/FaceTile.vue'
+import HeartbeatWave from '@/components/HeartbeatWave.vue'
+import RobotDog from '@/components/RobotDog.vue'
+import StageParticles from '@/components/StageParticles.vue'
+import { actionName } from '@/constants/actions'
+import { faceName } from '@/constants/faces'
+import type { BleDevice, Device } from '@/types'
+import { describeDeviceStatus, formatRelative } from '@/utils/format'
+import { emitParticleBurst } from '@/utils/theme'
 import { useAuthStore } from '@/stores/auth'
 import { useDeviceStore } from '@/stores/device'
 import { usePetStore } from '@/stores/pet'
@@ -51,7 +57,8 @@ function enter(device: Device): void {
   void router.push('/console')
 }
 
-function refresh(): void {
+function refresh(event?: MouseEvent): void {
+  if (event && event.clientX > 0) emitParticleBurst(event.clientX, event.clientY, 'accent', 12)
   void deviceStore.load()
   if (showBlePanel.value) void deviceStore.scanBle()
 }
@@ -62,14 +69,16 @@ async function openBleReconnect(): Promise<void> {
   await deviceStore.scanBle()
 }
 
-async function scan(): Promise<void> {
+async function scan(event?: MouseEvent): Promise<void> {
+  if (event && event.clientX > 0) emitParticleBurst(event.clientX, event.clientY, 'oled', 16)
   if (auth.uid) deviceStore.bindUser(auth.uid)
   selectedAddress.value = null
   await deviceStore.scanBle()
 }
 
-async function connectSelected(): Promise<void> {
+async function connectSelected(event?: MouseEvent): Promise<void> {
   if (!selectedBle.value || connecting.value) return
+  if (event && event.clientX > 0) emitParticleBurst(event.clientX, event.clientY, 'oled', 20)
   const wasBound = !!selectedBle.value.bound_to_me
   connecting.value = true
   try {
@@ -140,161 +149,315 @@ async function unbind(device: Device): Promise<void> {
   }
 }
 
-function stateText(device: Device): string {
-  const state = device.control_state
-  if (state === 'faulted') return 'Faulted'
-  if (state === 'handover_required') return 'Handover'
-  if (!device.online) return 'Offline'
-  const map: Record<string, string> = {
-    ready: 'Ready',
-    busy: 'Busy',
-    handover_required: 'Handover',
-    recovery_required: 'Recovery',
-    faulted: 'Faulted',
-    unconfigured: 'Unconfigured',
-    offline: 'Offline',
+function isCurrentConnected(device: Device): boolean {
+  return device.id === deviceStore.currentId && pet.connected
+}
+
+function deviceStatusView(device: Device) {
+  const live = isCurrentConnected(device)
+  return describeDeviceStatus({
+    online: live ? pet.online : device.online,
+    controlState: live ? pet.controlState : device.control_state,
+  })
+}
+
+function isDeviceOnline(device: Device): boolean {
+  return isCurrentConnected(device) ? pet.online : device.online
+}
+
+function isDeviceBusy(device: Device): boolean {
+  const state = isCurrentConnected(device) ? pet.controlState : device.control_state
+  return state === 'busy'
+}
+
+function liveBattery(device: Device): number | null {
+  return isCurrentConnected(device) && pet.battery !== null ? pet.battery : device.battery
+}
+
+function liveVoltage(device: Device): number | null {
+  return isCurrentConnected(device) ? pet.voltage : null
+}
+
+function liveFace(device: Device): number {
+  return isCurrentConnected(device) && pet.face !== null ? pet.face : 5
+}
+
+function liveAction(device: Device): number | null {
+  return isCurrentConnected(device) ? pet.action : null
+}
+
+function batteryLitCount(batt: number | null): number {
+  if (batt === null) return 0
+  return Math.max(0, Math.min(10, Math.round(batt / 10)))
+}
+
+function batteryTone(batt: number | null): string {
+  if (batt === null) return ''
+  if (batt > 50) return 'ok'
+  if (batt > 20) return 'warn'
+  return 'bad'
+}
+
+function voltagePercent(volt: number | null): number {
+  if (volt === null) return 0
+  // 适配单节 3.3–4.2V 或双节 6.4–8.4V 常见锂电范围
+  const [min, max] = volt > 5 ? [6.4, 8.4] : [3.3, 4.2]
+  return Math.max(6, Math.min(100, ((volt - min) / (max - min)) * 100))
+}
+
+function rssiBars(rssi: number | null): number {
+  if (rssi === null) return 2
+  if (rssi > -55) return 4
+  if (rssi > -68) return 3
+  if (rssi > -80) return 2
+  return 1
+}
+
+function blipPosition(item: BleDevice, index: number): { left: string; top: string } {
+  const total = Math.max(1, deviceStore.bleDevices.length)
+  const angle = (index / total) * Math.PI * 2 - Math.PI / 3
+  const strength = item.rssi !== null ? Math.max(0, Math.min(1, (-item.rssi - 35) / 55)) : 0.55
+  const radius = 18 + strength * 24
+  return {
+    left: `${(50 + Math.cos(angle) * radius).toFixed(1)}%`,
+    top: `${(50 + Math.sin(angle) * radius).toFixed(1)}%`,
   }
-  return (state && map[state]) || state || 'Online'
 }
 </script>
 
 <template>
   <div class="page">
     <div class="page-head">
-      <div>
-        <div class="page-kicker">02 / Devices</div>
-        <h2 class="page-title">我的设备</h2>
-        <p class="page-sub">每个账号只看得到自己的设备</p>
+      <h2 class="page-title">我的设备</h2>
+      <div class="head-actions">
+        <el-button :icon="Refresh" :loading="deviceStore.loading" @click="refresh($event)">
+          刷新
+        </el-button>
       </div>
-      <el-button class="ghost" :icon="Refresh" :loading="deviceStore.loading" @click="refresh">
-        刷新
-      </el-button>
     </div>
 
-    <el-skeleton v-if="deviceStore.loading && !deviceStore.loaded" :rows="4" animated />
+    <el-skeleton v-if="deviceStore.loading && !deviceStore.loaded" :rows="5" animated />
 
     <template v-else>
-      <section v-if="showBlePanel" class="card claim">
-        <div class="claim-head">
-          <div>
-            <span class="claim-kicker mono">BLE / ECB02H2</span>
-            <h3>{{ deviceStore.devices.length === 0 ? '连接低功耗蓝牙桌宠' : '扫描并重连低功耗蓝牙' }}</h3>
-            <p>扫描附近的低功耗蓝牙设备（ECB02H2），点选后直接建立连接并绑定到当前账号，无需配对码。</p>
-          </div>
-          <el-icon class="claim-icon"><Link /></el-icon>
-        </div>
-
-        <div v-if="deviceStore.bleDevices.length > 0" class="claimable-list">
-          <button
-            v-for="item in deviceStore.bleDevices"
-            :key="item.address"
-            type="button"
-            class="claimable"
-            :class="{ active: selectedAddress === item.address }"
-            @click="selectedAddress = item.address"
-          >
-            <span class="mono device-id">
-              {{ item.transport.toUpperCase() }} · {{ item.address }}
-              <template v-if="item.rssi !== null"> · {{ item.rssi }} dBm</template>
-              <template v-if="item.bound_to_me"> · 已绑定</template>
-            </span>
-            <span class="claimable-name">{{ item.name }}</span>
-            <span class="claimable-dot" />
-          </button>
-        </div>
-        <EmptyState
-          v-else
-          title="暂未发现可用蓝牙设备"
-          hint="请确认桌宠已通电且 ECB02H2 处于可被扫描状态，点击下方按钮重新扫描"
-        />
-
-        <div class="claim-form">
-          <el-button class="ghost" :icon="Refresh" :loading="deviceStore.scanning" @click="scan">
-            扫描蓝牙
-          </el-button>
-          <el-button
-            type="primary"
-            :disabled="!selectedBle"
-            :loading="connecting"
-            @click="connectSelected"
-          >
-            {{ selectedBle?.bound_to_me ? '重新连接蓝牙' : '直接连接并绑定' }}
-          </el-button>
-          <el-button v-if="deviceStore.devices.length > 0" @click="blePanelOpen = false">
-            收起
-          </el-button>
-        </div>
-        <p v-if="!selectedBle" class="claim-hint">先从上方扫描结果点选一台蓝牙设备，再点击连接。</p>
-      </section>
-
-      <div v-if="deviceStore.devices.length > 0" class="grid">
+      <div v-if="deviceStore.devices.length > 0" class="stage-list">
         <article
-          v-for="(device, index) in deviceStore.devices"
+          v-for="device in deviceStore.devices"
           :key="device.id"
-          class="device card"
-          :class="{ offline: !device.online }"
+          class="hero-grid"
+          :class="{ offline: !isDeviceOnline(device) }"
         >
-          <div class="top">
-            <span class="index mono">{{ String(index + 1).padStart(2, '0') }}</span>
-            <span class="status" :class="device.online ? 'ok' : ''">{{ stateText(device) }}</span>
-          </div>
+          <!-- 左侧：实时桌宠互动舞台 -->
+          <section class="card pet-stage">
+            <div class="stage-viewport">
+              <StageParticles :online="isDeviceOnline(device)" :busy="isDeviceBusy(device)" />
+              <div class="dog-slot">
+                <RobotDog
+                  :face="liveFace(device)"
+                  :online="isDeviceOnline(device)"
+                  class="stage-dog"
+                />
+              </div>
+            </div>
 
-          <div class="name-row">
-            <h3 class="name" :title="device.name">{{ device.name }}</h3>
-            <PetCharm class="charm" :online="device.online" />
-            <button type="button" class="rename" title="修改桌宠名字" @click="openRename(device)">
-              <el-icon><EditPen /></el-icon>
-            </button>
-          </div>
+            <div class="stage-footer">
+              <div class="name-main">
+                <div class="name-head">
+                  <h3 class="name" :title="device.name">{{ device.name }}</h3>
+                  <button
+                    type="button"
+                    class="rename"
+                    title="修改桌宠名字"
+                    @click="openRename(device)"
+                  >
+                    <el-icon><EditPen /></el-icon>
+                  </button>
+                </div>
+                <span class="status" :class="deviceStatusView(device).tone">
+                  {{ deviceStatusView(device).label }}
+                </span>
+              </div>
 
-          <div class="meta">
-            <div class="meta-cell">
-              <span class="meta-label mono">Firmware</span>
-              <span class="meta-value mono">{{ device.firmware || '—' }}</span>
-            </div>
-            <div class="meta-cell">
-              <span class="meta-label mono">Battery</span>
-              <span class="meta-value mono">
-                {{ device.battery === null ? '—' : `${device.battery}%` }}
-              </span>
-            </div>
-            <div class="meta-cell">
-              <span class="meta-label mono">Control</span>
-              <span class="meta-value mono">{{ device.control_state }}</span>
-            </div>
-            <div class="meta-cell">
-              <span class="meta-label mono">Heartbeat</span>
-              <span class="meta-value">{{ formatRelative(device.last_heartbeat ?? undefined) }}</span>
-            </div>
-          </div>
-
-          <div class="foot">
-            <span class="heart mono">{{ formatDateTime(device.last_heartbeat ?? undefined) }}</span>
-            <div class="foot-actions">
-              <el-button class="ghost" :icon="Link" @click="openBleReconnect">重连蓝牙</el-button>
-              <el-button class="unbind" :icon="SwitchButton" @click="unbind(device)">解绑</el-button>
-              <el-button class="enter" @click="enter(device)">
-                进入控制台 <span class="arrow">↗</span>
+              <el-button class="enter" type="primary" @click="enter(device)">
+                进入控制台 <span class="arrow mono">↗</span>
               </el-button>
+            </div>
+          </section>
+
+          <!-- 右侧：真实硬件遥测与蓝牙控制 -->
+          <div class="telemetry-col">
+            <div class="metrics-grid">
+              <div class="card metric-card">
+                <span class="metric-label">电量</span>
+                <div class="metric-value mono">
+                  {{ liveBattery(device) === null ? '—' : liveBattery(device) }}
+                  <small v-if="liveBattery(device) !== null">%</small>
+                </div>
+                <div class="energy-segs" aria-hidden="true">
+                  <span
+                    v-for="idx in 10"
+                    :key="idx"
+                    class="energy-seg"
+                    :class="[
+                      idx <= batteryLitCount(liveBattery(device))
+                        ? ['lit', batteryTone(liveBattery(device))]
+                        : '',
+                    ]"
+                  />
+                </div>
+              </div>
+
+              <div class="card metric-card">
+                <span class="metric-label">电压</span>
+                <div class="metric-value mono">
+                  {{ liveVoltage(device) === null ? '—' : liveVoltage(device)!.toFixed(2) }}
+                  <small v-if="liveVoltage(device) !== null">V</small>
+                </div>
+                <div class="volt-track" aria-hidden="true">
+                  <div
+                    class="volt-fill"
+                    :style="{ width: `${voltagePercent(liveVoltage(device))}%` }"
+                  />
+                </div>
+              </div>
+
+              <div class="card metric-card">
+                <span class="metric-label">固件</span>
+                <div class="metric-value mono fw-val">{{ device.firmware || '—' }}</div>
+              </div>
+
+              <div class="card metric-card">
+                <div class="metric-top">
+                  <span class="metric-label">最近心跳</span>
+                  <span class="hb-time">
+                    {{ formatRelative(device.last_heartbeat ?? undefined) }}
+                  </span>
+                </div>
+                <HeartbeatWave :online="isDeviceOnline(device)" />
+              </div>
+            </div>
+
+            <div class="card mirror-card">
+              <div class="mirror-oled">
+                <FaceTile :face="liveFace(device)" />
+              </div>
+              <div class="mirror-rows">
+                <div class="mirror-row">
+                  <span>当前表情</span>
+                  <strong>{{ faceName(liveFace(device)) }}</strong>
+                </div>
+                <div class="mirror-row">
+                  <span>当前动作</span>
+                  <strong>
+                    {{ liveAction(device) === null ? '—' : actionName(liveAction(device)!) }}
+                  </strong>
+                </div>
+              </div>
+            </div>
+
+            <div class="card link-bar">
+              <div class="link-actions">
+                <el-button :icon="Link" @click="openBleReconnect">重连蓝牙</el-button>
+                <el-button class="unbind" :icon="SwitchButton" @click="unbind(device)">
+                  解绑
+                </el-button>
+              </div>
             </div>
           </div>
         </article>
       </div>
+
+      <!-- 低功耗蓝牙扫描雷达面板 -->
+      <section v-if="showBlePanel" class="card ble-panel">
+        <div class="ble-radar-col" :class="{ scanning: deviceStore.scanning }">
+          <div class="radar-disc" aria-hidden="true">
+            <span class="radar-cross-h" />
+            <span class="radar-cross-v" />
+            <div class="radar-sweep" />
+            <div class="radar-center" />
+            <button
+              v-for="(item, idx) in deviceStore.bleDevices"
+              :key="item.address"
+              type="button"
+              class="radar-blip"
+              :class="{ selected: selectedAddress === item.address }"
+              :style="blipPosition(item, idx)"
+              :title="item.name"
+              @click="selectedAddress = item.address"
+            />
+          </div>
+        </div>
+
+        <div class="ble-main">
+          <div class="claim-head">
+            <div>
+              <span class="claim-kicker mono">BLE / ECB02H2</span>
+              <h3>{{ deviceStore.devices.length === 0 ? '连接蓝牙桌宠' : '扫描并重连低功耗蓝牙' }}</h3>
+            </div>
+            <el-button v-if="deviceStore.devices.length > 0" size="small" @click="blePanelOpen = false">
+              收起
+            </el-button>
+          </div>
+
+          <div v-if="deviceStore.bleDevices.length > 0" class="claimable-list">
+            <button
+              v-for="item in deviceStore.bleDevices"
+              :key="item.address"
+              type="button"
+              class="claimable"
+              :class="{ active: selectedAddress === item.address }"
+              @click="selectedAddress = item.address"
+            >
+              <div class="claimable-top">
+                <span class="claimable-name">{{ item.name }}</span>
+                <span class="rssi-bars" aria-hidden="true">
+                  <span
+                    v-for="(barH, bIdx) in [5, 8, 10, 13]"
+                    :key="barH"
+                    class="rssi-bar"
+                    :class="{ lit: bIdx < rssiBars(item.rssi) }"
+                    :style="{ height: `${barH}px` }"
+                  />
+                </span>
+              </div>
+              <span class="mono device-id">
+                {{ item.address }}
+                <template v-if="item.rssi !== null"> · {{ item.rssi }} dBm</template>
+                <template v-if="item.bound_to_me"> · 已绑定</template>
+              </span>
+            </button>
+          </div>
+          <EmptyState
+            v-else
+            title="暂未发现可用蓝牙设备"
+            hint="确认桌宠已通电后重新扫描"
+          />
+
+          <div class="claim-form">
+            <el-button :icon="Refresh" :loading="deviceStore.scanning" @click="scan($event)">
+              扫描蓝牙
+            </el-button>
+            <el-button
+              type="primary"
+              :disabled="!selectedBle"
+              :loading="connecting"
+              @click="connectSelected($event)"
+            >
+              {{ selectedBle?.bound_to_me ? '重新连接蓝牙' : '直接连接并绑定' }}
+            </el-button>
+          </div>
+        </div>
+      </section>
     </template>
 
-    <el-dialog v-model="renameVisible" title="修改桌宠名字" width="380px">
-      <div class="rename-body">
-        <span class="field-label mono">Pet name</span>
-        <el-input
-          v-model="renameValue"
-          maxlength="64"
-          show-word-limit
-          placeholder="给桌宠起个名字"
-          autofocus
-          @keyup.enter="submitRename"
-        />
-        <p class="rename-hint">1–64 个字符，保存后同步到设备列表。</p>
-      </div>
+    <el-dialog v-model="renameVisible" title="修改桌宠名字" width="360px">
+      <el-input
+        v-model="renameValue"
+        maxlength="64"
+        show-word-limit
+        placeholder="给桌宠起个名字"
+        autofocus
+        @keyup.enter="submitRename"
+      />
       <template #footer>
         <el-button @click="renameVisible = false">取消</el-button>
         <el-button type="primary" :loading="renameSaving" @click="submitRename">保存</el-button>
@@ -304,310 +467,546 @@ function stateText(device: Device): string {
 </template>
 
 <style scoped>
-.ghost {
-  border-color: var(--hair);
-  background: transparent;
-  color: var(--ink);
+.head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
-.ghost:hover {
-  border-color: var(--ink);
-  background: transparent;
-  color: var(--ink);
-}
-
-.grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(460px, 1fr));
-  gap: 14px;
-}
-
-.device {
+.stage-list {
   display: flex;
   flex-direction: column;
-  padding: 16px 18px 14px;
-  transition:
-    border-color 0.18s ease,
-    background 0.18s ease;
+  gap: 20px;
 }
 
-.device:hover {
-  border-color: rgba(20, 20, 20, 0.36);
+.hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.22fr) minmax(330px, 0.98fr);
+  gap: 18px;
+  align-items: stretch;
 }
 
-.device.offline {
-  background: rgba(247, 244, 238, 0.6);
+.pet-stage {
+  display: flex;
+  flex-direction: column;
+  min-height: 440px;
 }
 
-.device.offline .name {
-  color: var(--dim);
+.stage-viewport {
+  position: relative;
+  flex: 1;
+  min-height: 320px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 28px 18px;
+  background: var(--bg-stage);
+  overflow: hidden;
 }
 
-.top {
+.dog-slot {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  max-width: 390px;
+  display: flex;
+  justify-content: center;
+}
+
+.stage-dog {
+  width: 100%;
+}
+
+.stage-footer {
+  position: relative;
+  z-index: 2;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 18px 22px;
+  border-top: 1px solid var(--hair-soft);
 }
 
-.index {
-  font-size: 9px;
-  letter-spacing: 0.12em;
-  color: var(--faint);
-}
-
-.name-row {
+.name-main {
   display: flex;
+  flex-direction: column;
   align-items: flex-start;
-  min-height: 64px;
-  margin: 4px 0 8px;
+  gap: 8px;
+  min-width: 0;
+}
+
+.name-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
 }
 
 .name {
-  max-width: calc(100% - 114px);
-  padding-top: 9px;
   overflow: hidden;
-  font-size: 18px;
-  font-weight: 500;
-  letter-spacing: -0.01em;
-  line-height: 1.3;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.charm {
-  margin: -6px 0 0 8px;
+.hero-grid.offline .name {
+  color: var(--dim);
 }
 
 .rename {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
-  margin: 8px 0 0 3px;
+  width: 28px;
+  height: 28px;
   padding: 0;
-  border: 1px solid transparent;
-  border-radius: var(--radius);
-  background: transparent;
-  color: var(--faint);
-  opacity: 0.6;
+  border: 1px solid var(--hair);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--dim);
   cursor: pointer;
+  flex-shrink: 0;
   transition:
-    opacity 0.16s ease,
     color 0.16s ease,
-    border-color 0.16s ease;
-}
-
-.device:hover .rename {
-  opacity: 1;
+    border-color 0.16s ease,
+    background-color 0.16s ease;
 }
 
 .rename:hover {
-  border-color: var(--hair);
+  border-color: var(--hair-strong);
+  background: var(--surface-3);
   color: var(--ink);
-}
-
-.meta {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1px;
-  background: var(--hair-soft);
-  border: 1px solid var(--hair-soft);
-}
-
-.meta-cell {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 9px 11px;
-  background: var(--panel);
-}
-
-.meta-label {
-  font-size: 8px;
-  letter-spacing: 0.13em;
-  text-transform: uppercase;
-  color: var(--faint);
-}
-
-.meta-value {
-  font-size: 12.5px;
-  font-weight: 500;
-}
-
-.foot {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px solid var(--hair-soft);
-}
-
-.foot-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.heart {
-  font-size: 8.5px;
-  letter-spacing: 0.06em;
-  color: var(--faint);
 }
 
 .enter {
-  height: 30px;
-  padding: 0 12px;
-  border: 1px solid var(--ink);
-  background: transparent;
-  color: var(--ink);
-  font-size: 12px;
-  letter-spacing: 0.03em;
+  height: 38px;
+  padding: 0 18px;
+  background: var(--grad-line);
+  border-color: transparent;
+  color: #101214;
+  font-weight: 600;
 }
 
 .enter:hover {
-  background: var(--ink);
-  color: var(--paper);
-  border-color: var(--ink);
-}
-
-.unbind {
-  height: 30px;
-  padding: 0 10px;
-  border: 1px solid var(--hair);
-  background: transparent;
-  color: var(--dim);
-  font-size: 12px;
-}
-
-.unbind:hover {
-  border-color: var(--danger);
-  color: var(--danger);
+  background: var(--grad-line);
+  border-color: transparent;
+  color: #101214;
+  filter: brightness(1.06);
 }
 
 .arrow {
-  font-family: var(--mono);
   margin-left: 4px;
 }
 
-.claim {
-  padding: 22px;
+/* 右侧遥测列 */
+.telemetry-col {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.metric-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 112px;
+  padding: 16px 18px;
+}
+
+.metric-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.metric-label {
+  font-size: 12px;
+  color: var(--dim);
+}
+
+.hb-time {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.metric-value {
+  font-size: 25px;
+  font-weight: 600;
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+  color: var(--ink);
+}
+
+.metric-value small {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--dim);
+  margin-left: 3px;
+}
+
+.fw-val {
+  font-size: 21px;
+}
+
+.energy-segs {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 4px;
+  height: 7px;
+}
+
+.energy-seg {
+  border-radius: 2px;
+  background: var(--hair);
+  transition: background-color 0.25s ease;
+}
+
+.energy-seg.lit.ok {
+  background: var(--ok);
+}
+
+.energy-seg.lit.warn {
+  background: var(--warn);
+}
+
+.energy-seg.lit.bad {
+  background: var(--danger);
+}
+
+.volt-track {
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--hair);
+  overflow: hidden;
+}
+
+.volt-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--grad-line);
+  transition: width 0.45s var(--ease-out);
+}
+
+.mirror-card {
+  display: grid;
+  grid-template-columns: 148px minmax(0, 1fr);
+  gap: 16px;
+  align-items: center;
+  padding: 15px 18px;
+}
+
+.mirror-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.mirror-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12.5px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--hair-soft);
+}
+
+.mirror-row:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.mirror-row span {
+  color: var(--dim);
+}
+
+.mirror-row strong {
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.link-bar {
+  padding: 14px 18px;
+}
+
+.link-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.unbind:hover {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+/* 蓝牙扫描雷达面板 */
+.ble-panel {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+}
+
+.ble-radar-col {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 20px;
+  border-right: 1px solid var(--hair-soft);
+  background: var(--surface-2);
+}
+
+.radar-disc {
+  position: relative;
+  width: 170px;
+  height: 170px;
+  border-radius: 50%;
+  border: 1px solid var(--hair-strong);
+  background:
+    radial-gradient(circle, var(--accent-soft) 0%, transparent 66%),
+    repeating-radial-gradient(circle, transparent 0 27px, var(--hair-soft) 27px 28px);
+  overflow: hidden;
+}
+
+.radar-cross-h,
+.radar-cross-v {
+  position: absolute;
+  background: var(--hair-soft);
+}
+
+.radar-cross-h {
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+}
+
+.radar-cross-v {
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+}
+
+.radar-sweep {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, transparent 276deg, var(--accent-1) 360deg);
+  opacity: 0.24;
+  animation: radarSpin 5.5s linear infinite;
+}
+
+.ble-radar-col.scanning .radar-sweep {
+  opacity: 0.42;
+  animation-duration: 1.8s;
+}
+
+@keyframes radarSpin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.radar-center {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: var(--accent-1);
+}
+
+.radar-blip {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--oled-glow);
+  transform: translate(-50%, -50%);
+  cursor: pointer;
+}
+
+.radar-blip::after {
+  content: '';
+  position: absolute;
+  inset: -5px;
+  border-radius: 50%;
+  border: 1px solid var(--oled-glow);
+  animation: blipRing 2.1s ease-out infinite;
+}
+
+.radar-blip.selected {
+  background: var(--accent-2);
+  transform: translate(-50%, -50%) scale(1.25);
+}
+
+.radar-blip.selected::after {
+  border-color: var(--accent-2);
+}
+
+@keyframes blipRing {
+  0% {
+    transform: scale(0.7);
+    opacity: 0.85;
+  }
+  100% {
+    transform: scale(2.1);
+    opacity: 0;
+  }
+}
+
+.ble-main {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 24px;
 }
 
 .claim-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 18px;
+  gap: 16px;
 }
 
 .claim-kicker {
-  font-size: 9px;
-  letter-spacing: 0.16em;
+  font-size: 10px;
+  letter-spacing: 0.14em;
   color: var(--faint);
 }
 
 .claim-head h3 {
-  margin: 8px 0 6px;
-  font-size: 20px;
-  font-weight: 500;
-}
-
-.claim-head p {
-  max-width: 560px;
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.7;
-  color: var(--dim);
-}
-
-.claim-icon {
-  font-size: 26px;
-  color: var(--faint);
+  margin-top: 6px;
+  font-size: 18px;
+  font-weight: 600;
 }
 
 .claimable-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 10px;
-  margin-top: 20px;
 }
 
 .claimable {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 12px 14px;
+  gap: 8px;
+  padding: 13px 14px;
   border: 1px solid var(--hair);
-  border-radius: var(--radius);
-  background: transparent;
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
   text-align: left;
   cursor: pointer;
+  transition:
+    border-color 0.18s ease,
+    background-color 0.18s ease,
+    transform 0.18s ease;
+}
+
+.claimable:hover {
+  border-color: var(--hair-strong);
+  transform: translateY(-1px);
 }
 
 .claimable.active {
-  border-color: var(--ink);
-  background: rgba(255, 255, 255, 0.5);
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
 }
 
-.device-id {
-  font-size: 8px;
-  letter-spacing: 0.14em;
-  color: var(--faint);
+.claimable-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .claimable-name {
-  font-size: 13px;
-  font-weight: 500;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
 }
 
-.claimable-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: rgba(20, 20, 20, 0.18);
+.device-id {
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+  color: var(--dim);
 }
 
-.claimable.active .claimable-dot {
+.rssi-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2.5px;
+  height: 13px;
+}
+
+.rssi-bar {
+  width: 3px;
+  border-radius: 1px;
+  background: var(--hair-strong);
+}
+
+.rssi-bar.lit {
   background: var(--ok);
 }
 
 .claim-form {
   display: flex;
+  align-items: center;
   gap: 10px;
-  margin-top: 18px;
-  max-width: 420px;
+  flex-wrap: wrap;
 }
 
-.claim-hint {
-  margin: 10px 0 0;
-  font-size: 11px;
-  color: var(--faint);
-}
-
-.rename-body {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-}
-
-.field-label {
-  font-size: 8px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--faint);
-}
-
-.rename-hint {
-  font-size: 11px;
-  color: var(--faint);
-}
-
-@media (max-width: 720px) {
-  .grid {
+@media (max-width: 1080px) {
+  .hero-grid,
+  .ble-panel {
     grid-template-columns: 1fr;
+  }
+
+  .ble-radar-col {
+    border-right: 0;
+    border-bottom: 1px solid var(--hair-soft);
+  }
+}
+
+@media (max-width: 680px) {
+  .metrics-grid,
+  .mirror-card {
+    grid-template-columns: 1fr;
+  }
+
+  .stage-footer {
+    padding: 14px 16px;
   }
 }
 </style>

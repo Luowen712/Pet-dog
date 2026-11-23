@@ -3,17 +3,20 @@ import { defineStore } from 'pinia'
 import { ElMessage } from 'element-plus'
 import type {
   CommandReceipt,
+  ControlState,
   MusicData,
   StateData,
   WeatherData,
   WeatherInfo,
   WsEvent,
 } from '@/types'
+import { useDeviceStore } from '@/stores/device'
 import { getDeviceStatus } from '@/api/device'
 import { getCommand, sendCommand } from '@/api/command'
 import { setCurrentFace } from '@/api/face'
 import { sendMusic } from '@/api/music'
 import { getWeather } from '@/api/weather'
+import { faceName } from '@/constants/faces'
 import { DeviceSocket } from '@/utils/ws'
 import type { SocketStatus } from '@/utils/ws'
 import { ApiError } from '@/utils/errors'
@@ -65,10 +68,12 @@ export const usePetStore = defineStore('pet', () => {
   const socketStatus = ref<SocketStatus>('closed')
   const online = ref(false)
   const controlState = ref('unconfigured')
+  const lastHeartbeat = ref<string | null>(null)
   const battery = ref<number | null>(null)
   const voltage = ref<number | null>(null)
   const action = ref<number | null>(null)
   const face = ref<number | null>(null)
+  const switchingFace = ref<number | null>(null)
   /** 音乐/天气本期关闭，字段保留给隐藏组件与旧事件处理器 */
   const weather = ref<WeatherInfo | null>(null)
   const musicState = ref(0)
@@ -206,9 +211,22 @@ export const usePetStore = defineStore('pet', () => {
     voltage.value = data.voltage
     action.value = data.action
     face.value = data.face
+    if (typeof data.updated_at === 'string') {
+      lastHeartbeat.value = data.updated_at
+    } else if (data.updated_at === null) {
+      lastHeartbeat.value = null
+    } else if (online.value) {
+      lastHeartbeat.value = new Date().toISOString()
+    }
     if (typeof data.music_state === 'number') musicState.value = data.music_state
     if (typeof data.track === 'number' && data.track > 0) track.value = data.track
     if (typeof data.volume === 'number') volume.value = data.volume
+    useDeviceStore().patchLive(currentDeviceId, {
+      online: online.value,
+      control_state: controlState.value as ControlState,
+      battery: battery.value,
+      last_heartbeat: lastHeartbeat.value,
+    })
   }
 
   function applyMusic(data: MusicData): void {
@@ -305,6 +323,12 @@ export const usePetStore = defineStore('pet', () => {
         if (!acceptStateRevision(event.data.session_id, event.data.state_revision)) break
         online.value = event.data.online
         controlState.value = event.data.control_state
+        if (event.data.online) lastHeartbeat.value = new Date().toISOString()
+        useDeviceStore().patchLive(currentDeviceId, {
+          online: online.value,
+          control_state: controlState.value as ControlState,
+          ...(event.data.online ? { last_heartbeat: lastHeartbeat.value } : {}),
+        })
         break
       case 'ping':
         break
@@ -515,13 +539,28 @@ export const usePetStore = defineStore('pet', () => {
     }
   }
 
-  async function changeFace(id: number): Promise<void> {
-    if (!currentDeviceId || !connected.value || !online.value || !['ready', 'busy'].includes(controlState.value)) return
+  async function changeFace(id: number): Promise<boolean> {
+    if (
+      !currentDeviceId ||
+      !connected.value ||
+      !online.value ||
+      !['ready', 'busy'].includes(controlState.value) ||
+      switchingFace.value !== null
+    ) {
+      return false
+    }
+    const gen = generation
+    switchingFace.value = id
     try {
       // 不做乐观写入：等待后端/设备通过 state 事件回传当前表情（N34）
       await setCurrentFace(currentDeviceId, id)
+      if (gen === generation) ElMessage.success(`已下发表情「${faceName(id)}」`)
+      return true
     } catch {
       // 统一提示由 request 层处理
+      return false
+    } finally {
+      if (gen === generation && switchingFace.value === id) switchingFace.value = null
     }
   }
 
@@ -547,10 +586,12 @@ export const usePetStore = defineStore('pet', () => {
   function resetState(): void {
     online.value = false
     controlState.value = 'unconfigured'
+    lastHeartbeat.value = null
     battery.value = null
     voltage.value = null
     action.value = null
     face.value = null
+    switchingFace.value = null
     weather.value = null
     musicState.value = 0
     track.value = 0
@@ -588,10 +629,12 @@ export const usePetStore = defineStore('pet', () => {
     socketStatus,
     online,
     controlState,
+    lastHeartbeat,
     battery,
     voltage,
     action,
     face,
+    switchingFace,
     weather,
     musicState,
     track,

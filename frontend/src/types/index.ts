@@ -173,6 +173,7 @@ export interface StateData {
   volume?: number | null
   weather_code?: number | null
   temp?: number | null
+  updated_at?: string | null
 }
 
 export interface LinkData {

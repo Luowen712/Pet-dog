@@ -4,6 +4,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { ArrowDown } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import BrandMark from '@/components/BrandMark.vue'
+import ThemeToggle from '@/components/ThemeToggle.vue'
+import { describeDeviceStatus } from '@/utils/format'
 import { useAuthStore } from '@/stores/auth'
 import { useDeviceStore } from '@/stores/device'
 import { usePetStore } from '@/stores/pet'
@@ -38,15 +40,18 @@ watch(
 const showOffline = computed(
   () => deviceStore.currentId > 0 && pet.socketStatus === 'closed' && everConnected.value,
 )
+const liveStatus = computed(() =>
+  describeDeviceStatus({
+    online: pet.online,
+    controlState: pet.controlState,
+  }),
+)
 const pageTitle = computed(() => (typeof route.meta.title === 'string' ? route.meta.title : '控制台'))
 const initial = computed(() => auth.user?.name?.slice(0, 1) ?? 'A')
 
-// 账号页不占顶部导航：入口收在右上角用户菜单的「账号管理」里，
-// 和「切换账号」「退出登录」放在一起，避免同一页面出现两个入口。
 const navItems = [
-  { path: '/devices', label: '设备', icon: 'Monitor' },
-  { path: '/console', label: '控制台', icon: 'Odometer' },
-  { path: '/faces', label: '表情', icon: 'Sunny' },
+  { path: '/devices', label: '设备' },
+  { path: '/console', label: '控制台' },
 ]
 
 onMounted(async () => {
@@ -89,7 +94,6 @@ async function submitSwitch(): Promise<void> {
 
   switchLoading.value = true
   try {
-    // 直接换新 token，不需要先调 logout；旧账号在其它设备上的登录不受影响
     const prevUid = auth.uid
     await auth.login(username, switchForm.password)
     everConnected.value = false
@@ -104,7 +108,7 @@ async function submitSwitch(): Promise<void> {
     ElMessage.success(`已切换到 ${auth.user?.name ?? username}`)
     await router.replace('/devices')
   } catch {
-    // 登录失败保留原账号，错误提示由 request 层统一弹出
+    // 错误提示由 request 层统一弹出
   } finally {
     switchLoading.value = false
   }
@@ -120,62 +124,54 @@ async function logout(): Promise<void> {
 
 <template>
   <div class="shell">
-    <div class="guides" aria-hidden="true">
-      <span class="g g17" />
-      <span class="g g50" />
-      <span class="g g83" />
-    </div>
-
     <header class="top">
       <router-link to="/devices" class="brand" :aria-label="pageTitle">
         <BrandMark :size="27" />
-        <span class="brand-text">
-          <strong>PET-DOG</strong>
-          <em>STM32 COMPANION</em>
-        </span>
+        <strong class="brand-name mono">PET-DOG</strong>
       </router-link>
 
-      <nav class="nav">
-        <router-link
-          v-for="(item, index) in navItems"
-          :key="item.path"
-          :to="item.path"
-          class="nav-item"
-          active-class="active"
-        >
-          <span class="idx mono">0{{ index + 1 }}</span>
-          <span>{{ item.label }}</span>
-        </router-link>
+      <nav class="nav" aria-label="主导航">
+        <div class="nav-pill">
+          <router-link
+            v-for="item in navItems"
+            :key="item.path"
+            :to="item.path"
+            class="nav-item"
+            :class="{ active: item.path === '/console' && route.path === '/faces' }"
+            active-class="active"
+          >
+            <span>{{ item.label }}</span>
+          </router-link>
+        </div>
       </nav>
 
       <div class="actions">
         <span v-if="mockMode" class="mock mono">MOCK</span>
 
-        <label v-if="deviceStore.devices.length > 0" class="device">
-          <span class="device-label mono">DEVICE</span>
-          <el-select
-            :model-value="deviceStore.currentId"
-            class="device-select"
-            size="small"
-            @change="onDeviceChange"
-          >
-            <el-option
-              v-for="device in deviceStore.devices"
-              :key="device.id"
-              :label="device.name"
-              :value="device.id"
-            >
-              <span class="option">
-                <span class="dot" :class="{ online: device.online }" />
-                {{ device.name }}
-              </span>
-            </el-option>
-          </el-select>
-        </label>
+        <ThemeToggle />
 
-        <span class="live" :class="{ on: pet.connected }">
-          <span class="dot" :class="{ online: pet.connected }" />
-          {{ pet.connected ? 'LIVE' : 'LINK…' }}
+        <el-select
+          v-if="deviceStore.devices.length > 0"
+          :model-value="deviceStore.currentId"
+          class="device-select"
+          size="small"
+          @change="onDeviceChange"
+        >
+          <el-option
+            v-for="device in deviceStore.devices"
+            :key="device.id"
+            :label="device.name"
+            :value="device.id"
+          >
+            <span class="option">
+              <span class="dot" :class="{ online: device.online }" />
+              {{ device.name }}
+            </span>
+          </el-option>
+        </el-select>
+
+        <span v-if="deviceStore.current" class="status live" :class="liveStatus.tone">
+          {{ liveStatus.label }}
         </span>
 
         <el-dropdown trigger="click" @command="onCommand">
@@ -197,9 +193,7 @@ async function logout(): Promise<void> {
     </header>
 
     <transition name="fade">
-      <div v-if="showOffline" class="offline mono">
-        REALTIME LINK LOST — RECONNECTING
-      </div>
+      <div v-if="showOffline" class="offline">连接已断开，正在重连…</div>
     </transition>
 
     <main class="content">
@@ -213,7 +207,7 @@ async function logout(): Promise<void> {
     <el-dialog
       v-model="switchVisible"
       title="切换账号"
-      width="400px"
+      width="380px"
       class="switch-dialog"
       :close-on-click-modal="!switchLoading"
       :close-on-press-escape="!switchLoading"
@@ -223,14 +217,13 @@ async function logout(): Promise<void> {
         <div class="switch-current">
           <span class="avatar mono">{{ initial }}</span>
           <div class="switch-current-text">
-            <span class="mono switch-label">当前账号</span>
             <strong>{{ auth.user?.name ?? '未登录' }}</strong>
             <span class="mono">@{{ auth.user?.username ?? '--' }}</span>
           </div>
         </div>
 
         <label class="switch-field">
-          <span class="switch-label mono">新账号</span>
+          <span class="switch-label">账号</span>
           <el-input
             v-model="switchForm.username"
             placeholder="用户名"
@@ -240,21 +233,17 @@ async function logout(): Promise<void> {
         </label>
 
         <label class="switch-field">
-          <span class="switch-label mono">密码</span>
+          <span class="switch-label">密码</span>
           <el-input
             v-model="switchForm.password"
             type="password"
             show-password
-            placeholder="输入新账号密码"
+            placeholder="输入密码"
             autocomplete="current-password"
             :disabled="switchLoading"
             @keyup.enter="submitSwitch"
           />
         </label>
-
-        <p class="switch-hint">
-          切换后会重新加载新账号的设备和实时连接。旧账号不会被登出，它在其它设备上的登录仍然有效。
-        </p>
       </div>
 
       <template #footer>
@@ -277,106 +266,64 @@ async function logout(): Promise<void> {
   background: transparent;
 }
 
-.guides {
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-}
-
-.g {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 1px;
-  background: var(--grid);
-}
-
-.g17 {
-  left: 17%;
-}
-
-.g50 {
-  left: 50%;
-}
-
-.g83 {
-  left: 83%;
-}
-
 .top {
   position: relative;
   z-index: 20;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 34px;
+  gap: 24px;
   height: 64px;
   flex-shrink: 0;
-  padding: 0 42px;
-  background: rgba(239, 236, 230, 0.86);
+  padding: 0 36px;
+  background: var(--glass-nav);
   border-bottom: 1px solid var(--hair);
-  backdrop-filter: blur(8px);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
 }
 
 .brand {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 10px;
+  white-space: nowrap;
 }
 
-.brand-text {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  line-height: 1.1;
-}
-
-.brand-text strong {
-  font-family: var(--mono);
-  font-size: 12px;
-  font-weight: 500;
+.brand-name {
+  font-size: 13px;
+  font-weight: 600;
   letter-spacing: 0.16em;
-}
-
-.brand-text em {
-  font-family: var(--mono);
-  font-style: normal;
-  font-size: 8px;
-  letter-spacing: 0.14em;
-  color: var(--faint);
 }
 
 .nav {
   display: flex;
   align-items: center;
-  gap: 22px;
   min-width: 0;
-  overflow-x: auto;
-  scrollbar-width: none;
 }
 
-.nav::-webkit-scrollbar {
-  display: none;
+.nav-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--hair);
+  background: var(--surface-2);
 }
 
 .nav-item {
-  position: relative;
   display: inline-flex;
-  align-items: baseline;
-  gap: 5px;
-  padding: 6px 0;
-  font-size: 12.5px;
-  letter-spacing: 0.02em;
+  align-items: center;
+  height: 30px;
+  padding: 0 16px;
+  border-radius: var(--radius-pill);
+  font-size: 13px;
+  font-weight: 500;
   color: var(--dim);
   white-space: nowrap;
-  transition: color 0.18s ease;
-}
-
-.nav-item .idx {
-  font-size: 8px;
-  letter-spacing: 0.06em;
-  color: var(--faint);
+  transition:
+    color 0.2s var(--ease-out),
+    background-color 0.2s var(--ease-out);
 }
 
 .nav-item:hover {
@@ -384,64 +331,39 @@ async function logout(): Promise<void> {
 }
 
 .nav-item.active {
-  color: var(--ink);
-}
-
-.nav-item.active::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 1px;
-  background: var(--grad-line);
+  color: var(--btn-primary-ink);
+  background: var(--btn-primary-bg);
 }
 
 .actions {
   display: flex;
   align-items: center;
-  gap: 18px;
+  gap: 12px;
 }
 
 .mock {
-  padding: 2px 6px;
+  padding: 3px 7px;
   border: 1px solid var(--hair);
-  font-size: 8px;
-  letter-spacing: 0.14em;
-  color: var(--faint);
-}
-
-.device {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.device-label {
-  font-size: 8px;
-  letter-spacing: 0.14em;
+  border-radius: var(--radius-xs);
+  font-size: 9px;
+  letter-spacing: 0.12em;
   color: var(--faint);
 }
 
 .device-select {
-  width: 168px;
+  width: 158px;
 }
 
 .device-select :deep(.el-select__wrapper) {
-  box-shadow: none;
-  background: transparent;
-  padding: 0;
-  min-height: 20px;
-}
-
-.device-select :deep(.el-select__wrapper:hover) {
-  box-shadow: none;
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  box-shadow: 0 0 0 1px var(--hair) inset;
+  padding: 0 12px;
+  min-height: 32px;
 }
 
 .device-select :deep(.el-select__selected-item) {
-  font-family: var(--mono);
-  font-size: 11px;
-  letter-spacing: 0.02em;
+  font-size: 12px;
   color: var(--ink);
 }
 
@@ -452,42 +374,45 @@ async function logout(): Promise<void> {
 }
 
 .live {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-family: var(--mono);
-  font-size: 9px;
-  letter-spacing: 0.12em;
-  color: var(--faint);
-}
-
-.live.on {
-  color: var(--ok);
+  height: 32px;
 }
 
 .user {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
+  height: 34px;
+  padding: 3px 10px 3px 4px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--hair);
+  background: var(--surface-2);
   cursor: pointer;
   outline: none;
+  white-space: nowrap;
+  transition: border-color 0.18s ease;
+}
+
+.user:hover {
+  border-color: var(--hair-strong);
 }
 
 .avatar {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 25px;
-  height: 25px;
-  background: var(--ink);
-  color: var(--paper);
+  width: 26px;
+  height: 26px;
+  background: var(--grad-line);
+  color: #101214;
   font-size: 11px;
-  border-radius: var(--radius);
+  font-weight: 600;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 
 .user-name {
-  font-size: 12px;
-  color: var(--dim);
+  font-size: 12.5px;
+  color: var(--ink-2);
 }
 
 .caret {
@@ -498,12 +423,12 @@ async function logout(): Promise<void> {
 .offline {
   position: relative;
   z-index: 19;
-  padding: 7px 42px;
-  background: #f4e6cf;
-  border-bottom: 1px solid rgba(20, 20, 20, 0.1);
-  color: #6d4a12;
-  font-size: 9.5px;
-  letter-spacing: 0.12em;
+  padding: 8px 36px;
+  background: var(--warn-soft);
+  border-bottom: 1px solid var(--warn-border);
+  color: var(--warn);
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .content {
@@ -526,13 +451,14 @@ async function logout(): Promise<void> {
   gap: 12px;
   padding: 12px 14px;
   border: 1px solid var(--hair-soft);
-  background: rgba(247, 244, 238, 0.6);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
 }
 
 .switch-current .avatar {
-  width: 40px;
-  height: 40px;
-  font-size: 16px;
+  width: 38px;
+  height: 38px;
+  font-size: 15px;
 }
 
 .switch-current-text {
@@ -542,20 +468,18 @@ async function logout(): Promise<void> {
 }
 
 .switch-current-text strong {
-  font-size: 15px;
-  font-weight: 500;
+  font-size: 14.5px;
+  font-weight: 600;
 }
 
 .switch-current-text .mono {
-  font-size: 9px;
-  color: var(--faint);
+  font-size: 11px;
+  color: var(--dim);
 }
 
 .switch-label {
-  font-size: 8px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--faint);
+  font-size: 12px;
+  color: var(--dim);
 }
 
 .switch-field {
@@ -564,25 +488,10 @@ async function logout(): Promise<void> {
   gap: 6px;
 }
 
-.switch-hint {
-  margin: 0;
-  font-size: 11px;
-  line-height: 1.65;
-  color: var(--dim);
-}
-
-@media (max-width: 1180px) {
+@media (max-width: 1120px) {
   .top {
-    gap: 22px;
-    padding: 0 28px;
-  }
-
-  .nav {
-    gap: 16px;
-  }
-
-  .brand-text em {
-    display: none;
+    gap: 14px;
+    padding: 0 20px;
   }
 
   .mock {
@@ -591,41 +500,23 @@ async function logout(): Promise<void> {
 }
 
 @media (max-width: 900px) {
-  .guides {
-    display: none;
-  }
-
   .top {
-    grid-template-columns: auto 1fr;
-    gap: 14px;
-    padding: 0 16px;
+    padding: 0 14px;
+    gap: 10px;
   }
 
-  .nav {
-    display: none;
+  .nav-item {
+    padding: 0 11px;
+    font-size: 12px;
   }
 
-  .actions {
-    justify-self: end;
-    gap: 12px;
-  }
-
-  .device-select {
-    width: 138px;
-  }
-
-  .device-label,
-  .user-name,
-  .live {
+  .device-select,
+  .user-name {
     display: none;
   }
 
   .offline {
-    padding: 7px 16px;
-  }
-
-  .page {
-    padding: 20px 16px 56px;
+    padding: 8px 16px;
   }
 }
 </style>

@@ -11,7 +11,7 @@ class MockRuntime {
   battery = 78
   voltage = 3.92
   action = 0x31
-  face = 0
+  face = 5
   musicState = 0
   track = 3
   volume = 15

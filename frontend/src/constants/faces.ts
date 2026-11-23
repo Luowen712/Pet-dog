@@ -1,14 +1,5 @@
-export type EyeStyle =
-  | 'round'
-  | 'arc'
-  | 'line'
-  | 'slant'
-  | 'big'
-  | 'star'
-  | 'square'
-  | 'capsule'
-  | 'chevron'
-export type MouthStyle = 'smile' | 'frown' | 'o' | 'flat' | 'cat' | 'omega' | 'none'
+export type EyeStyle = 'line' | 'round' | 'star' | 'slant' | 'chevron' | 'capsule' | 'big'
+export type MouthStyle = 'o' | 'frown' | 'cat' | 'smile' | 'omega' | 'none'
 
 export interface FaceDef {
   id: number
@@ -19,21 +10,18 @@ export interface FaceDef {
 }
 
 /**
- * 屏幕上半 128×32 的 7 张内置表情，按编号 0~6 下发。
- *
- * 0 / 1 / 2 / 3 的造型对齐实体硬件的 OLED 显示：
- *   00 两块方眼（无嘴）  · 01 `>ω<`  · 02 两枚竖圆眼（无嘴）  · 03 `>ω<`
- * 硬件屏底部那行 A:00 S:00 B:1 F:0 L1 E:000 N:0000 是调试编码，
- * 属于屏上叠加的遥测文字，不是表情的一部分，这里一律不画。
+ * 7 张内置表情，编号 0~6 与嵌入式固件 DebugUI.c / OLED_Data.c 严格对齐：
+ *   0 睡觉 (Face_sleep) · 1 委屈 (Face_stare) · 2 开心 (Face_happy) · 3 狂热 (Face_mania)
+ *   4 超开心 (Face_very_happy) · 5 眼睛 (Face_eyes，上电默认) · 6 震惊 (Face_hello)
  */
 export const FACES: FaceDef[] = [
-  { id: 0, name: '普通', eyes: 'square', mouth: 'none' },
-  { id: 1, name: '开心', eyes: 'chevron', mouth: 'omega' },
-  { id: 2, name: '困倦', eyes: 'capsule', mouth: 'none' },
-  { id: 3, name: '生气', eyes: 'chevron', mouth: 'omega' },
-  { id: 4, name: '惊讶', eyes: 'big', mouth: 'o' },
-  { id: 5, name: '伤心', eyes: 'round', mouth: 'frown' },
-  { id: 6, name: '卖萌', eyes: 'star', mouth: 'cat', blush: true },
+  { id: 0, name: '睡觉', eyes: 'line', mouth: 'o' },
+  { id: 1, name: '委屈', eyes: 'round', mouth: 'frown' },
+  { id: 2, name: '开心', eyes: 'star', mouth: 'cat', blush: true },
+  { id: 3, name: '狂热', eyes: 'slant', mouth: 'smile', blush: true },
+  { id: 4, name: '超开心', eyes: 'chevron', mouth: 'omega', blush: true },
+  { id: 5, name: '眼睛', eyes: 'capsule', mouth: 'none' },
+  { id: 6, name: '震惊', eyes: 'big', mouth: 'o' },
 ]
 
 export const FACE_BY_ID = new Map<number, FaceDef>(FACES.map((face) => [face.id, face]))

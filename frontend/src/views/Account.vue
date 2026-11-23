@@ -118,93 +118,99 @@ async function confirmDelete(): Promise<void> {
 <template>
   <div class="page">
     <div class="page-head">
-      <div>
-        <div class="page-kicker">05 / Account</div>
-        <h2 class="page-title">账号</h2>
-        <p class="page-sub">密码、会话与账号注销，都只影响当前登录的这个账号</p>
-      </div>
+      <h2 class="page-title">账号</h2>
     </div>
 
     <div class="cols">
       <section class="card identity">
-        <div class="card-head">
-          <span class="card-title">当前账号</span>
-          <span class="card-meta mono">UID {{ auth.user?.id ?? '--' }}</span>
-        </div>
         <div class="identity-body">
-          <span class="avatar mono">{{ auth.user?.name?.slice(0, 1) ?? '?' }}</span>
+          <div class="orbital-avatar">
+            <span class="avatar mono">{{ auth.user?.name?.slice(0, 1) ?? '?' }}</span>
+          </div>
           <div class="identity-text">
             <strong>{{ auth.user?.name ?? '未登录' }}</strong>
             <span class="mono">@{{ auth.user?.username ?? '--' }}</span>
-            <span class="role mono">{{ isAdmin ? 'ADMIN' : 'USER' }}</span>
+            <span class="role">{{ isAdmin ? '管理员' : '普通用户' }}</span>
+          </div>
+          <div v-if="deviceStore.current" class="identity-device">
+            <span>绑定设备</span>
+            <strong>{{ deviceStore.current.name }}</strong>
           </div>
         </div>
-        <p class="hint">设备、控制台和会话都按这个账号隔离；换账号不会带走上一个人的设备选择。</p>
       </section>
 
-      <section class="card">
-        <div class="card-head">
-          <span class="card-title">修改密码</span>
-          <span class="card-meta">10–128 位</span>
-        </div>
-        <div class="form">
-          <label class="field">
-            <span class="field-label mono">原密码</span>
-            <el-input v-model="passwordForm.old" type="password" show-password autocomplete="current-password" />
-          </label>
-          <label class="field">
-            <span class="field-label mono">新密码</span>
-            <el-input v-model="passwordForm.next" type="password" show-password autocomplete="new-password" />
-          </label>
-          <label class="field">
-            <span class="field-label mono">确认新密码</span>
-            <el-input v-model="passwordForm.confirm" type="password" show-password autocomplete="new-password" />
-          </label>
-          <p class="hint">修改成功后所有会话立即失效，需要用新密码重新登录。</p>
-          <el-button type="primary" :loading="passwordSaving" @click="submitPassword">
-            修改密码
-          </el-button>
-        </div>
-      </section>
+      <div class="forms-stack">
+        <section class="card">
+          <div class="card-head">
+            <span class="card-title">修改密码</span>
+          </div>
+          <div class="form">
+            <label class="field">
+              <span class="field-label">原密码</span>
+              <el-input
+                v-model="passwordForm.old"
+                type="password"
+                show-password
+                autocomplete="current-password"
+              />
+            </label>
+            <label class="field">
+              <span class="field-label">新密码</span>
+              <el-input
+                v-model="passwordForm.next"
+                type="password"
+                show-password
+                placeholder="10–128 位"
+                autocomplete="new-password"
+              />
+            </label>
+            <label class="field">
+              <span class="field-label">确认新密码</span>
+              <el-input
+                v-model="passwordForm.confirm"
+                type="password"
+                show-password
+                autocomplete="new-password"
+              />
+            </label>
+            <el-button type="primary" :loading="passwordSaving" @click="submitPassword">
+              修改密码
+            </el-button>
+          </div>
+        </section>
 
-      <section class="card">
-        <div class="card-head">
-          <span class="card-title">会话</span>
-          <span class="card-meta">tv + 1</span>
-        </div>
-        <div class="form">
-          <p class="hint">
-            退出所有设备上的登录：后端会把 token 版本 +1，其它浏览器、手机和实时连接都会立刻失效。
-          </p>
-          <el-button :loading="logoutSaving" @click="logoutEverywhere">
-            退出所有设备上的登录
-          </el-button>
-        </div>
-      </section>
+        <section class="card">
+          <div class="card-head">
+            <span class="card-title">登录会话</span>
+          </div>
+          <div class="form">
+            <p class="hint">使当前账号在所有设备上的登录立即失效。</p>
+            <el-button :loading="logoutSaving" @click="logoutEverywhere">
+              退出所有设备上的登录
+            </el-button>
+          </div>
+        </section>
 
-      <section class="card danger">
-        <div class="card-head">
-          <span class="card-title">注销账号</span>
-          <span class="card-meta mono">IRREVERSIBLE</span>
-        </div>
-        <div class="form">
-          <p class="hint">
-            注销后账号立即失效，已绑定的设备会解绑并进入待交接状态。注销不是急停，已经写出去的动作可能还会继续。
-          </p>
-          <el-button type="danger" plain @click="openDelete">注销账号</el-button>
-        </div>
-      </section>
+        <section class="card danger">
+          <div class="card-head">
+            <span class="card-title">注销账号</span>
+          </div>
+          <div class="form">
+            <p class="hint">注销不可撤销，已绑定的设备会自动解绑。</p>
+            <el-button type="danger" plain @click="openDelete">注销账号</el-button>
+          </div>
+        </section>
+      </div>
     </div>
 
-    <el-dialog v-model="deleteVisible" title="注销账号" width="420px">
-      <div class="form">
-        <p class="hint">需要同时输入密码和用户名确认。此操作不可撤销。</p>
+    <el-dialog v-model="deleteVisible" title="注销账号" width="400px">
+      <div class="form dialog-form">
         <label class="field">
-          <span class="field-label mono">密码</span>
+          <span class="field-label">密码</span>
           <el-input v-model="deleteForm.password" type="password" show-password />
         </label>
         <label class="field">
-          <span class="field-label mono">输入用户名「{{ auth.user?.username }}」</span>
+          <span class="field-label">输入用户名「{{ auth.user?.username }}」确认</span>
           <el-input v-model="deleteForm.username" autocomplete="off" />
         </label>
       </div>
@@ -219,59 +225,116 @@ async function confirmDelete(): Promise<void> {
 <style scoped>
 .cols {
   display: grid;
-  grid-template-columns: minmax(280px, 0.9fr) minmax(0, 1.2fr);
-  gap: 16px;
+  grid-template-columns: minmax(280px, 0.85fr) minmax(0, 1.15fr);
+  gap: 18px;
   align-items: start;
 }
 
 .identity {
-  grid-row: span 2;
+  background: var(--bg-stage);
 }
 
 .identity-body {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 14px;
+  padding: 28px 24px;
+}
+
+.orbital-avatar {
+  position: relative;
+  width: 88px;
+  height: 88px;
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 20px;
+  justify-content: center;
+}
+
+.orbital-avatar::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1.5px dashed var(--accent-border);
+  animation: orbitSpin 18s linear infinite;
+}
+
+@keyframes orbitSpin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .avatar {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 48px;
-  height: 48px;
-  border: 1px solid var(--hair);
-  font-size: 18px;
-  color: var(--ink);
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: var(--grad-line);
+  font-size: 24px;
+  font-weight: 600;
+  color: #101214;
 }
 
 .identity-text {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
 }
 
 .identity-text strong {
-  font-size: 17px;
-  font-weight: 500;
+  font-size: 19px;
+  font-weight: 600;
 }
 
 .identity-text span {
-  font-size: 11px;
-  color: var(--faint);
+  font-size: 12px;
+  color: var(--dim);
 }
 
 .role {
-  margin-top: 4px;
-  letter-spacing: 0.12em;
+  margin-top: 2px;
+  color: var(--ink-2);
+}
+
+.identity-device {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 6px;
+  padding-top: 14px;
+  border-top: 1px solid var(--hair-soft);
+  font-size: 12.5px;
+}
+
+.identity-device span {
+  color: var(--dim);
+}
+
+.forms-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
 .form {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 12px;
+  gap: 13px;
   padding: 18px 20px 20px;
 }
 
@@ -283,39 +346,32 @@ async function confirmDelete(): Promise<void> {
 }
 
 .field-label {
-  font-size: 8px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--faint);
+  font-size: 12px;
+  color: var(--dim);
+}
+
+.dialog-form {
+  padding: 0;
 }
 
 .hint {
   margin: 0;
-  padding: 0 20px;
-  font-size: 11.5px;
-  line-height: 1.7;
+  font-size: 12.5px;
+  line-height: 1.6;
   color: var(--dim);
 }
 
-.form .hint {
-  padding: 0;
-}
-
 .danger {
-  border-color: rgba(165, 58, 51, 0.3);
+  border-color: var(--danger-border);
 }
 
 .danger .card-title {
   color: var(--danger);
 }
 
-@media (max-width: 980px) {
+@media (max-width: 960px) {
   .cols {
     grid-template-columns: 1fr;
-  }
-
-  .identity {
-    grid-row: auto;
   }
 }
 </style>

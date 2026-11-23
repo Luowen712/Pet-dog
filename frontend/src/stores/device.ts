@@ -125,6 +125,17 @@ export const useDeviceStore = defineStore('device', () => {
     if (ownerUid && id > 0) setStoredDeviceId(ownerUid, id)
   }
 
+  /** 用 WS 实时事件刷新设备卡片的在线/控制/电量/心跳字段，避免页面停留时显示过期离线态 */
+  function patchLive(
+    id: number,
+    patch: Partial<Pick<Device, 'online' | 'control_state' | 'battery' | 'last_heartbeat'>>,
+  ): void {
+    if (!id) return
+    const idx = devices.value.findIndex((device) => device.id === id)
+    if (idx < 0) return
+    devices.value[idx] = { ...devices.value[idx], ...patch }
+  }
+
   /** 设备被解绑 / 归属丢失：只清设备，保留登录态 */
   function remove(id: number): void {
     devices.value = devices.value.filter((device) => device.id !== id)
@@ -163,6 +174,7 @@ export const useDeviceStore = defineStore('device', () => {
     unbind,
     rename,
     select,
+    patchLive,
     remove,
     reset,
   }

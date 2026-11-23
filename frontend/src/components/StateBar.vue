@@ -2,60 +2,64 @@
 import { computed } from 'vue'
 import { actionName } from '@/constants/actions'
 import { faceName } from '@/constants/faces'
+import { describeDeviceStatus } from '@/utils/format'
 import { usePetStore } from '@/stores/pet'
 
 const pet = usePetStore()
 
 const batteryColor = computed(() => {
-  if (pet.battery === null) return 'rgba(20,20,20,.2)'
-  if (pet.battery > 50) return '#2f6b4f'
-  if (pet.battery > 20) return '#9a6a1c'
-  return '#a53a33'
+  if (pet.battery === null) return 'var(--faint)'
+  if (pet.battery > 50) return 'var(--ok)'
+  if (pet.battery > 20) return 'var(--warn)'
+  return 'var(--danger)'
 })
 
 const batteryPercent = computed(() =>
   pet.battery === null ? 0 : Math.max(0, Math.min(100, pet.battery)),
 )
+
+const statusView = computed(() =>
+  describeDeviceStatus({
+    online: pet.online,
+    controlState: pet.controlState,
+  }),
+)
 </script>
 
 <template>
-  <div class="state-bar">
+  <div class="state-bar card">
     <div class="stat">
-      <span class="stat-label mono">Battery</span>
+      <span class="stat-label">电量</span>
       <div class="battery">
-        <span class="battery-num mono">
-          {{ pet.battery ?? '--' }}<i>%</i>
-        </span>
-        <el-progress
-          class="battery-bar"
-          :percentage="batteryPercent"
-          :stroke-width="2"
-          :show-text="false"
-          :color="batteryColor"
-        />
+        <span class="battery-num mono">{{ pet.battery ?? '--' }}<i>%</i></span>
+        <div class="battery-track">
+          <div
+            class="battery-fill"
+            :style="{ width: `${batteryPercent}%`, backgroundColor: batteryColor }"
+          />
+        </div>
       </div>
     </div>
 
     <div class="stat">
-      <span class="stat-label mono">Voltage</span>
+      <span class="stat-label">电压</span>
       <span class="stat-value mono">
-        {{ pet.voltage === null ? '--' : pet.voltage.toFixed(2) }} <i>V</i>
+        {{ pet.voltage === null ? '--' : pet.voltage.toFixed(2) }}<i>V</i>
       </span>
     </div>
 
     <div class="stat">
-      <span class="stat-label mono">Action</span>
+      <span class="stat-label">当前动作</span>
       <span class="stat-value">{{ pet.action === null ? '—' : actionName(pet.action) }}</span>
     </div>
 
     <div class="stat">
-      <span class="stat-label mono">Face</span>
+      <span class="stat-label">当前表情</span>
       <span class="stat-value">{{ pet.face === null ? '—' : faceName(pet.face) }}</span>
     </div>
 
     <div class="link">
-      <span class="dot" :class="{ online: pet.connected }" />
-      <span class="mono">{{ pet.connected ? 'LINK OK' : 'LINK LOST' }}</span>
+      <span class="status" :class="statusView.tone">{{ statusView.label }}</span>
     </div>
   </div>
 </template>
@@ -63,20 +67,19 @@ const batteryPercent = computed(() =>
 <style scoped>
 .state-bar {
   display: grid;
-  grid-template-columns: 1.1fr 0.8fr 1fr 0.7fr auto;
+  grid-template-columns: 1.2fr 0.85fr 1fr 0.85fr auto;
   align-items: stretch;
-  background: var(--panel);
-  border: 1px solid var(--hair);
-  border-radius: var(--radius);
-  overflow: hidden;
 }
 
 .stat {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
+  justify-content: center;
   gap: 5px;
   min-width: 0;
-  padding: 13px 16px 14px;
+  padding: 14px 18px;
   border-left: 1px solid var(--hair-soft);
 }
 
@@ -85,22 +88,21 @@ const batteryPercent = computed(() =>
 }
 
 .stat-label {
-  font-size: 8.5px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--faint);
+  font-size: 11px;
+  color: var(--dim);
 }
 
 .stat-value {
-  font-size: 13px;
-  font-weight: 500;
+  font-size: 14px;
+  font-weight: 600;
   color: var(--ink);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.stat-value i {
+.stat-value i,
+.battery-num i {
   font-style: normal;
   font-size: 10px;
   color: var(--faint);
@@ -114,35 +116,37 @@ const batteryPercent = computed(() =>
 }
 
 .battery-num {
-  font-size: 13px;
-  font-weight: 500;
+  font-size: 14px;
+  font-weight: 600;
   white-space: nowrap;
 }
 
-.battery-num i {
-  font-style: normal;
-  font-size: 9px;
-  color: var(--faint);
+.battery-track {
+  flex: 1;
+  min-width: 40px;
+  height: 5px;
+  border-radius: var(--radius-pill);
+  background: var(--hair);
+  overflow: hidden;
 }
 
-.battery-bar {
-  flex: 1;
-  min-width: 34px;
+.battery-fill {
+  height: 100%;
+  border-radius: inherit;
+  transition: width 0.38s var(--ease-out);
 }
 
 .link {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 0 16px;
+  justify-content: flex-end;
+  padding: 12px 18px;
   border-left: 1px solid var(--hair-soft);
-  font-size: 8.5px;
-  letter-spacing: 0.12em;
-  color: var(--faint);
-  white-space: nowrap;
 }
 
-@media (max-width: 1180px) {
+@media (max-width: 1120px) {
   .state-bar {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -156,18 +160,10 @@ const batteryPercent = computed(() =>
   }
 
   .link {
-    border-top: 1px solid var(--hair-soft);
-    padding: 12px 16px;
-  }
-}
-
-@media (max-width: 640px) {
-  .stat {
-    border-left: 0;
-  }
-
-  .link {
     grid-column: 1 / -1;
+    border-left: 0;
+    border-top: 1px solid var(--hair-soft);
+    justify-content: flex-start;
   }
 }
 </style>
