@@ -35,6 +35,7 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+
 def upgrade() -> None:
     """Upgrade schema."""
     # ==================== device：绑定状态 4 列 ====================
@@ -197,7 +198,9 @@ def upgrade() -> None:
     )
 
 
+
 def downgrade() -> None:
+    """回滚 0002：删掉新增的表，并反向移除设备绑定相关的列。"""
     op.drop_table("device_session_record")
     op.drop_table("legacy_row_archive")
     op.drop_table("audit")

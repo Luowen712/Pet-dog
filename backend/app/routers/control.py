@@ -30,27 +30,37 @@ class Face(Target):
     face: int
 
 
+
 def unavailable(reason):
+    """构造 409 不可控响应，并附带具体原因。"""
     return {**fail(40900, '当前不能控制设备'), 'reason': reason}
 
 
+
 def not_visible():
+    """统一 404 响应：不区分记录不存在与无权查看。"""
     return fail(40400, '记录不存在或不可见')
 
 
+
 def check_limit(key, limit):
+    """按 60 秒窗口限流，超限直接抛 429。"""
     wait = ratelimit.check(key, limit, 60)
     if wait:
         raise ratelimit.too_many(wait)
 
 
+
 def current_session(app, ctx):
+    """取当前设备会话，仅当会话与鉴权上下文完全一致才返回。"""
     session = app.state.device_session
     return session if session and (session.device_pk, session.be) == (ctx.device_pk, ctx.be) else None
 
 
+
 @router.post('/api/commands/send')
 def send(body: Motion, request: Request, user=Depends(current_user), idempotency_key: UUID = Header()):
+    """下发运动指令：幂等去重、限流、落库回执，再写串口。"""
     key = str(idempotency_key)
     committed = False
     expected_hold = -1
@@ -83,6 +93,7 @@ def send(body: Motion, request: Request, user=Depends(current_user), idempotency
             writer = request.app.state.receipts
 
             def may_write():
+                """写串口前的复核：会话仍在忙态、门禁未被他人推进、指令行仍有效才放行。"""
                 if not committed or session.session_id != sid or session.control_state != 'busy':
                     return False
                 # No other holder entered send_gate between POST commit and SerialLink write.
@@ -116,8 +127,10 @@ def send(body: Motion, request: Request, user=Depends(current_user), idempotency
     return ok(result)
 
 
+
 @router.get('/api/commands/{cmd_id}')
 def get_command(cmd_id: UUID, user=Depends(current_user)):
+    """按指令 ID 查回执，只返回自己名下设备且同一绑定纪元的记录。"""
     with SessionLocal() as db:
         row = db.query(CommandLog).join(Device, Device.id == CommandLog.device_pk).filter(
             CommandLog.actor_user_id == user['uid'], CommandLog.msg_id == str(cmd_id),
@@ -125,8 +138,10 @@ def get_command(cmd_id: UUID, user=Depends(current_user)):
         return ok(receipt(row)) if row else not_visible()
 
 
+
 @router.post('/api/faces/current')
 def face(body: Face, request: Request, user=Depends(current_user)):
+    """下发表情指令，表情编号须在 0–6 之间。"""
     with send_gate.hold():
         with SessionLocal() as db:
             ctx = auth_context(db, user['uid'], user['tv'], body.device_id)
@@ -150,9 +165,12 @@ def face(body: Face, request: Request, user=Depends(current_user)):
     return ok({'face': body.face, 'dispatched': True})
 
 
+
 @router.post('/api/events/ticket')
 async def ticket(body: Target, request: Request, user=Depends(current_user)):
+    """签发 WebSocket 一次性票据，按用户与设备两个维度限流。"""
     def authorize():
+        """在线程里查库完成鉴权，避免阻塞事件循环。"""
         with SessionLocal() as db:
             return auth_context(db, user['uid'], user['tv'], body.device_id)
     ctx = await asyncio.to_thread(authorize)
@@ -166,6 +184,8 @@ async def ticket(body: Target, request: Request, user=Depends(current_user)):
     return ok(request.app.state.events.issue(ctx))
 
 
+
 @router.websocket('/ws/device')
 async def stream(ws: WebSocket, device_id: int, ticket: str):
+    """WebSocket 入口，把连接生命周期交给事件中心处理。"""
     await ws.app.state.events.connect(ws, device_id, ticket)

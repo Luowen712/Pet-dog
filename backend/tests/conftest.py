@@ -19,7 +19,9 @@ BACKEND = Path(__file__).resolve().parents[1]
 TOOL_PATH = BACKEND / "scripts" / "migrate_test_db.py"
 
 
+
 def _load_tool():
+    """按文件路径加载迁移工具模块，供护栏函数单测复用。"""
     spec = importlib.util.spec_from_file_location("migrate_test_db", TOOL_PATH)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"加载不到迁移工具：{TOOL_PATH}")
@@ -72,8 +74,10 @@ import pytest  # noqa: E402
 from app import ratelimit  # noqa: E402
 
 
+
 @pytest.fixture(autouse=True)
 def _reset_ratelimit():
+    """每个用例前后都清空限流计数，避免互相干扰。"""
     ratelimit.reset()
     yield
     ratelimit.reset()

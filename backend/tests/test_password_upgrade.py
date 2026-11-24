@@ -31,12 +31,15 @@ PASSWORD = "legacy-pw-123"
 NEW_PREFIX = "$argon2id$"
 
 
+
 def _legacy_hash(raw: str) -> str:
     """复刻旧的固定盐 SHA-256，用来伪造「历史遗留」账号。"""
     return hashlib.sha256(("pet$" + raw).encode("utf-8")).hexdigest()
 
 
+
 def _cleanup(db) -> None:
+    """清掉本用例创建的账号，含已改名的占位账号。"""
     db.query(User).filter(User.username.like("pwd_upgrade_%")).delete(
         synchronize_session=False
     )
@@ -46,7 +49,9 @@ def _cleanup(db) -> None:
     db.commit()
 
 
+
 def _make_user(db, username: str, password: str, status: str = "active") -> int:
+    """用旧版哈希造账号，返回主键。"""
     u = User(
         username=username,
         password_hash=_legacy_hash(password),
@@ -59,12 +64,15 @@ def _make_user(db, username: str, password: str, status: str = "active") -> int:
     return u.id
 
 
+
 def _read_hash(uid: int) -> str:
+    """读取账号当前的密码哈希。"""
     db = SessionLocal()
     try:
         return db.query(User).filter(User.id == uid).one().password_hash
     finally:
         db.close()
+
 
 
 def test_legacy_hash_upgrades_on_successful_login():
@@ -106,6 +114,7 @@ def test_legacy_hash_upgrades_on_successful_login():
         db.close()
 
 
+
 def test_wrong_password_leaves_hash_untouched():
     """密码错 → 拒绝登录，且哈希一个字节都不能变。"""
 
@@ -135,6 +144,7 @@ def test_wrong_password_leaves_hash_untouched():
         db.close()
 
 
+
 def test_inactive_user_does_not_upgrade():
     """账号不可用时即使密码对，也不升级——升级条件是「验证通过且 active」。"""
 
@@ -161,6 +171,7 @@ def test_inactive_user_does_not_upgrade():
         db.close()
 
 
+
 def test_unknown_format_is_rejected_not_guessed():
     """认不出的哈希格式一律判 False —— 绝不回落到弱校验。"""
 
@@ -168,6 +179,7 @@ def test_unknown_format_is_rejected_not_guessed():
     assert verify_pwd("", "anything") is False
     assert needs_rehash("bogus-string") is True
     assert needs_rehash("") is True
+
 
 
 def test_register_password_length_boundary():

@@ -8,14 +8,18 @@ branch_labels = None
 depends_on = None
 
 
+
 def upgrade():
+    """给 command_log 加回执唯一约束与 updated_at、error_code 两列。"""
     op.create_unique_constraint('uq_command_actor_msg', 'command_log', ['actor_user_id', 'msg_id'])
     op.add_column('command_log', sa.Column('updated_at', sa.DateTime(), nullable=True))
     op.add_column('command_log', sa.Column('error_code', sa.Integer(), nullable=True))
 
 
+
 def downgrade():
     # InnoDB may discard the implicit FK index when the composite key replaces it.
+    """回滚 0010：必要时补回外键索引，再删列与唯一约束。"""
     indexes = sa.inspect(op.get_bind()).get_indexes('command_log')
     if not any(i['name'] == 'fk_command_log_actor_user' for i in indexes):
         op.create_index('fk_command_log_actor_user', 'command_log', ['actor_user_id'])

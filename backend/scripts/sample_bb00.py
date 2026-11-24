@@ -26,6 +26,7 @@ client = TestClient(app)
 ADMIN = {"Authorization": f"Bearer {make_token(1, 'admin', 0)}"}
 
 
+
 def mask(obj):
     """把 token 打码，其余字段原样保留。"""
     if isinstance(obj, dict):

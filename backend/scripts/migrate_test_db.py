@@ -59,6 +59,7 @@ FORBIDDEN_DB_NAMES = {
 }
 
 
+
 def log(msg: str) -> None:
     """逐行落地输出。
 
@@ -73,10 +74,12 @@ def log(msg: str) -> None:
 # 这一节不连库、不 import app，方便被 tests/ 直接引用做单测。
 
 
+
 def db_name_of(url: str) -> str:
     """从 SQLAlchemy URL 里取出库名。取不到返回空串。"""
     path = urlparse(url).path.lstrip("/")
     return path.split("?")[0].strip()
+
 
 
 def assert_safe_db(url: str) -> str:
@@ -97,6 +100,7 @@ def assert_safe_db(url: str) -> str:
     return name
 
 
+
 def resolve_test_url(raw_url: str, test_db: str = DEFAULT_TEST_DB) -> str:
     """把正式库 URL 换成同名同主的测试库 URL；已经是测试库就原样返回。
 
@@ -112,6 +116,7 @@ def resolve_test_url(raw_url: str, test_db: str = DEFAULT_TEST_DB) -> str:
 
 
 # ---------------------------------------------------------------- 取配置
+
 
 
 def read_raw_db_url() -> str:
@@ -135,6 +140,7 @@ def read_raw_db_url() -> str:
     )
 
 
+
 def bind_test_db() -> str:
     """算出目标测试库并写回环境变量，之后再 import app 才读得到。"""
     test_db = os.environ.get("TEST_DB_NAME", DEFAULT_TEST_DB).strip() or DEFAULT_TEST_DB
@@ -152,6 +158,7 @@ def bind_test_db() -> str:
     return url
 
 
+
 def obfuscate(url: str) -> str:
     """打印用：把密码换成 ***。"""
     parsed = urlparse(url)
@@ -164,6 +171,7 @@ def obfuscate(url: str) -> str:
 # ---------------------------------------------------------------- 连库动作
 
 
+
 def get_engine():
     """import 必须在 bind_test_db() 之后，否则 engine 会绑到正式库。"""
     sys.path.insert(0, str(BACKEND))
@@ -172,12 +180,15 @@ def get_engine():
     return engine
 
 
+
 def get_alembic_config():
+    """加载 alembic.ini 配置，文件不存在直接退出。"""
     from alembic.config import Config  # noqa: E402
 
     if not ALEMBIC_INI.exists():
         raise SystemExit(f"[拒绝] 找不到 {ALEMBIC_INI}")
     return Config(str(ALEMBIC_INI))
+
 
 
 def drop_everything(engine) -> list[str]:
@@ -211,7 +222,9 @@ def drop_everything(engine) -> list[str]:
     return names
 
 
+
 def show_state(engine) -> None:
+    """打印当前 revision 与表清单，便于截图留证。"""
     from alembic.runtime.migration import MigrationContext  # noqa: E402
     from sqlalchemy import inspect  # noqa: E402
 
@@ -226,15 +239,21 @@ def show_state(engine) -> None:
 # ---------------------------------------------------------------- 子命令
 
 
+
 def cmd_current(engine, args) -> None:
+    """current 子命令：只显示测试库当前状态。"""
     show_state(engine)
+
 
 
 def cmd_tables(engine, args) -> None:
+    """tables 子命令：列出表与 revision，与 current 同源。"""
     show_state(engine)
 
 
+
 def cmd_reset(engine, args) -> None:
+    """reset 子命令：清空测试库后从零升级到目标版本。"""
     from alembic import command  # noqa: E402
 
     drop_everything(engine)
@@ -244,12 +263,15 @@ def cmd_reset(engine, args) -> None:
     show_state(engine)
 
 
+
 def cmd_upgrade(engine, args) -> None:
+    """upgrade 子命令：在不清空的前提下升级到目标版本。"""
     from alembic import command  # noqa: E402
 
     command.upgrade(get_alembic_config(), args.to)
     log(f"[完成] 已 upgrade 到 {args.to}")
     show_state(engine)
+
 
 
 def cmd_downgrade(engine, args) -> None:
@@ -264,6 +286,7 @@ def cmd_downgrade(engine, args) -> None:
         raise SystemExit(f"[失败] {exc}") from exc
     log(f"[完成] 已 downgrade 到 {args.to}")
     show_state(engine)
+
 
 
 def cmd_stamp(engine, args) -> None:
@@ -281,6 +304,7 @@ def cmd_stamp(engine, args) -> None:
     show_state(engine)
 
 
+
 def inspect_versions(cfg, engine) -> tuple[str | None, set[str]]:
     """返回（库里当前 revision，脚本目录里的 head 集合）。"""
     from alembic.runtime.migration import MigrationContext
@@ -290,6 +314,7 @@ def inspect_versions(cfg, engine) -> tuple[str | None, set[str]]:
     with engine.connect() as conn:
         current = MigrationContext.configure(conn).get_current_revision()
     return current, heads
+
 
 
 def cmd_revision(engine, args) -> None:
@@ -332,7 +357,9 @@ def cmd_revision(engine, args) -> None:
     log("[下一步] 打开这个文件逐行审，不要直接 upgrade。")
 
 
+
 def build_parser() -> argparse.ArgumentParser:
+    """构建子命令解析器，声明每个动作的参数。"""
     parser = argparse.ArgumentParser(
         description="隔离测试库的迁移演练工具（拒绝连接正式库）",
     )
@@ -384,7 +411,9 @@ HANDLERS = {
 }
 
 
+
 def main(argv: list[str] | None = None) -> int:
+    """先过护栏绑定测试库，再按子命令分发执行。"""
     args = build_parser().parse_args(argv)
     bind_test_db()  # 先过护栏，再过任何 app 模块
     engine = get_engine()

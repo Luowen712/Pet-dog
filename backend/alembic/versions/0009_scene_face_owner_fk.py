@@ -47,6 +47,7 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+
 def _orphan_count(bind, table: str) -> int:
     """owner_id 非 NULL、但指向不存在 user 的行数。
 
@@ -61,7 +62,9 @@ def _orphan_count(bind, table: str) -> int:
     return int(bind.execute(sa.text(sql)).scalar_one())
 
 
+
 def upgrade() -> None:
+    """给 scene 与 face_asset 的 owner_id 加外键，先验悬空数据再加约束。"""
     bind = op.get_bind()
 
     # ---- scene：已有 owner_id 列，先验数再加外键 ----
@@ -101,12 +104,14 @@ def upgrade() -> None:
     )
 
 
+
 def downgrade() -> None:
     # 顺序：先删引用方（face_asset 的外键/列），再删被引用方的约束。
     #
     # drop_index 这两行不能省。MySQL 删外键时不会连带删掉当初为它自动建的索引，
     # 少删一次，回退后的表结构就比 0008 多一个空索引，test_migration 的
     # compare_metadata 会立刻报差异。0008 的 downgrade 踩过同一个坑。
+    """回滚 0009：按依赖顺序删除外键、索引与 owner_id 列。"""
     op.drop_constraint("fk_face_asset_owner", "face_asset", type_="foreignkey")
     op.drop_index("fk_face_asset_owner", table_name="face_asset")
     op.drop_column("face_asset", "owner_id")

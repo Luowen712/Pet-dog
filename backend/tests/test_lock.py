@@ -15,14 +15,19 @@ from app.config import settings
 from app.link.lock import HostProcessLock, LOCK_NAME, LockUnavailable, ProcessLock
 
 
+
 @pytest.fixture
 def lock_name() -> str:
+    """为每个用例生成唯一的锁名，避免相互干扰。"""
     return "petdog:test:" + uuid.uuid4().hex[:12]
+
 
 
 @pytest.fixture
 def db_url() -> str:
+    """提供测试库连接串。"""
     return settings.DB_URL
+
 
 
 def test_lock_name_is_the_contract_constant():
@@ -34,7 +39,9 @@ def test_lock_name_is_the_contract_constant():
     assert LOCK_NAME == "petdog:instance"
 
 
+
 def test_first_instance_acquires(lock_name, db_url):
+    """首个实例能取得命名锁，且 holder_id 非空。"""
     lock = ProcessLock(lock_name, db_url)
     try:
         lock.acquire()
@@ -42,6 +49,7 @@ def test_first_instance_acquires(lock_name, db_url):
         assert lock.holder_id is not None
     finally:
         lock.release()
+
 
 
 def test_second_instance_is_rejected(lock_name, db_url):
@@ -55,6 +63,7 @@ def test_second_instance_is_rejected(lock_name, db_url):
         assert str(holder.holder_id) in str(exc.value)
     finally:
         holder.release()
+
 
 
 def test_failed_acquire_leaves_no_residue(lock_name, db_url):
@@ -74,6 +83,7 @@ def test_failed_acquire_leaves_no_residue(lock_name, db_url):
         successor.release()
 
 
+
 def test_release_lets_another_instance_in(lock_name, db_url):
     """release 必须真的释放物理连接上的锁，而不是只把对象字段清空。"""
     first = ProcessLock(lock_name, db_url)
@@ -87,6 +97,7 @@ def test_release_lets_another_instance_in(lock_name, db_url):
         second.release()
 
 
+
 def test_release_is_idempotent(lock_name, db_url):
     """关闭路径上有多个出口，release 会被调多次，不能抛。"""
     lock = ProcessLock(lock_name, db_url)
@@ -96,9 +107,11 @@ def test_release_is_idempotent(lock_name, db_url):
     lock.release()
 
 
+
 def test_still_held_is_false_before_acquire(lock_name, db_url):
     """没拿到锁时不能谎报 held，否则健康检查形同虚设。"""
     assert ProcessLock(lock_name, db_url).still_held() is False
+
 
 
 def test_double_acquire_is_a_programming_error(lock_name, db_url):
@@ -112,6 +125,7 @@ def test_double_acquire_is_a_programming_error(lock_name, db_url):
         lock.release()
 
 
+
 def test_lock_unavailable_is_not_a_runtime_error():
     """两种失败必须能分开：锁被占 vs 自己写错。
 
@@ -120,6 +134,7 @@ def test_lock_unavailable_is_not_a_runtime_error():
     """
     assert not issubclass(LockUnavailable, RuntimeError)
     assert issubclass(LockUnavailable, Exception)
+
 
 
 def test_still_held_survives_concurrent_callers(lock_name, db_url):
@@ -134,6 +149,7 @@ def test_still_held_survives_concurrent_callers(lock_name, db_url):
     stop = threading.Event()
 
     def ask() -> None:
+        """并发线程：反复查询锁是否仍被持有。"""
         while not stop.is_set():
             answers.append(lock.still_held())
 
@@ -149,6 +165,7 @@ def test_still_held_survives_concurrent_callers(lock_name, db_url):
         lock.release()
     assert len(answers) > 100
     assert all(answers), f"{answers.count(False)}/{len(answers)} 次误报锁已丢失"
+
 
 
 def test_still_held_is_false_after_connection_dies(lock_name, db_url):
@@ -178,6 +195,7 @@ def test_still_held_is_false_after_connection_dies(lock_name, db_url):
         successor.release()
 
 
+
 def test_host_lock_rejects_second_holder_and_releases(tmp_path):
     """主机排他文件锁：第二个持有者立即被拒，释放后可重新取得。"""
     lock_file = tmp_path / "host.lock"
@@ -201,7 +219,9 @@ def test_host_lock_rejects_second_holder_and_releases(tmp_path):
         second.release()
 
 
+
 def test_host_lock_double_acquire_and_idempotent_release(tmp_path):
+    """重复取锁应报错，未取得或重复释放都不报错。"""
     lock = HostProcessLock(tmp_path / "host2.lock")
     lock.release()  # 未取得前 release 不报错
     lock.acquire()

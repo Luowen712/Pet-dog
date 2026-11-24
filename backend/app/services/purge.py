@@ -8,7 +8,9 @@ from sqlalchemy.orm import Session
 from app.models import FaceAsset, Scene, User
 
 
+
 def purge_revoking(db: Session) -> dict:
+    """把 revoking 账号清成 revoked：先删场景与人脸，再改状态；幂等可重跑。"""
     rows = db.query(User).filter(User.status == "revoking").all()
 
     purged = []

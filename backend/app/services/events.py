@@ -17,7 +17,10 @@ class Connection:
     wake: asyncio.Event = field(default_factory=asyncio.Event)
     close_code: int | None = None
 
+
+
     def close(self, code):
+        """关闭连接：记录关闭码、清空待发队列并唤醒发送协程（4401 已关则不再覆盖）。"""
         if self.close_code == 4401:
             return
         self.close_code = code
@@ -26,7 +29,11 @@ class Connection:
 
 
 class Events:
+
+
+
     def __init__(self, loop):
+        """保存事件循环，初始化一次性票据表与已连接队列集合。"""
         self.loop = loop
         self.tickets = {}
         self.sockets = set()
@@ -44,17 +51,26 @@ class Events:
             return 1008
         return None
 
+
+
     def issue(self, ctx):
+        """签发 30 秒有效的一次性 WS 票据，并顺带清理过期票据。"""
         now = time.monotonic()
         self.tickets = {k: v for k, v in self.tickets.items() if v[1] > now}
         ticket = secrets.token_urlsafe(32)
         self.tickets[ticket] = (ctx, now + 30)
         return {'ticket': ticket, 'expires_in_sec': 30}
 
+
+
     def publish(self, pk, be, event, data):
+        """线程安全地把事件转投到事件循环，由 _offer 逐连接分发。"""
         self.loop.call_soon_threadsafe(self._offer, pk, be, event, data)
 
+
+
     def _offer(self, pk, be, event, data):
+        """把事件投给订阅该设备的连接；state 事件覆盖旧值，队列满则断开。"""
         for c in self.sockets:
             if c.close_code or (c.ctx.device_pk, c.ctx.be) != (pk, be):
                 continue
@@ -69,14 +85,19 @@ class Events:
             c.queue.append({'event': event, 'data': data})
             c.wake.set()
 
+
+
     def revoke(self, event):
+        """令牌或绑定变化后触发全量清理，线程安全地投递到事件循环。"""
         def code(ctx):
+            """判断上下文是否已被吊销：返回 4401（令牌升级）或 1008（设备换主）。"""
             if event.uid == ctx.uid and event.new_tv is not None and ctx.tv < event.new_tv:
                 return 4401
             if event.device_pk == ctx.device_pk and event.new_be is not None and ctx.be < event.new_be:
                 return 1008
             return None
         def invalidate():
+            """作废旧票据并踢掉已失效连接，在事件循环内执行（同时推进吊销水位）。"""
             if event.uid is not None and event.new_tv is not None:
                 self.min_tv[event.uid] = max(self.min_tv.get(event.uid, -1), event.new_tv)
             if event.device_pk is not None and event.new_be is not None:
@@ -87,8 +108,12 @@ class Events:
                     c.close(reason)
         self.loop.call_soon_threadsafe(invalidate)
 
+
+
     async def connect(self, ws, pk, ticket):
+        """WS 主流程：验票、复核鉴权、限制单账号连接数，然后注册并持续推送。"""
         async def deny(code):
+            """先完成握手再以指定码关闭，保证客户端能收到应用层关闭码。"""
             await ws.accept()  # a completed upgrade is needed for an application close code
             await ws.close(code)
         item = self.tickets.pop(ticket, None)
@@ -107,6 +132,7 @@ class Events:
         self.sockets.add(c)
 
         async def receive_disconnect():
+            """后台读取客户端消息，收到断开即标记连接关闭。"""
             try:
                 while (await ws.receive())['type'] != 'websocket.disconnect':
                     pass

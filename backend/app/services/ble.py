@@ -20,20 +20,28 @@ from app.models import Device, User
 
 
 class BleBindError(Exception):
+
+
+
     def __init__(self, code: int, message: str):
+        """记录业务错误码与提示文案。"""
         super().__init__(message)
         self.code = code
         self.message = message
 
 
+
 def normalize_ble_address(raw: str) -> str:
+    """校验并规整蓝牙地址：长度 1–32、不含空白，否则抛 40002。"""
     addr = raw.strip()
     if not (1 <= len(addr) <= 32) or any(ch.isspace() for ch in addr):
         raise BleBindError(40002, "蓝牙设备地址格式不合法")
     return addr
 
 
+
 def normalize_device_name(raw: str | None, fallback: str) -> str:
+    """规整设备名：空则用地址兜底，长度须在 1–64 之间。"""
     if raw is None or not raw.strip():
         return fallback[:64]
     name = raw.strip()
@@ -42,8 +50,11 @@ def normalize_device_name(raw: str | None, fallback: str) -> str:
     return name
 
 
+
 def is_sim_mode() -> bool:
+    """判断当前是否运行在模拟串口模式（SERIAL_PORT=sim）。"""
     return settings.SERIAL_PORT.strip().lower() == "sim"
+
 
 
 async def discover_ble_candidates(
@@ -65,6 +76,7 @@ async def discover_ble_candidates(
         service_uuid=settings.BLE_SERVICE_UUID,
         discover_fn=discover_fn,
     )
+
 
 
 def filter_ble_candidates(
@@ -99,6 +111,7 @@ def filter_ble_candidates(
     return visible
 
 
+
 async def scan_ble_for_user(
     db: Session,
     uid: int,
@@ -108,6 +121,7 @@ async def scan_ble_for_user(
     """扫描附近 BLE 外设并过滤掉已归属他人的设备，不泄露他人绑定关系。"""
     candidates = await discover_ble_candidates(discover_fn=discover_fn)
     return filter_ble_candidates(db, uid, candidates)
+
 
 
 def precheck_ble_bind(db: Session, uid: int, address: str) -> Device | None:
@@ -125,6 +139,7 @@ def precheck_ble_bind(db: Session, uid: int, address: str) -> Device | None:
         if existing.owner_id is not None and existing.owner_id != uid:
             raise BleBindError(40900, "设备已被其他账号绑定")
     return existing
+
 
 
 def bind_ble_device(

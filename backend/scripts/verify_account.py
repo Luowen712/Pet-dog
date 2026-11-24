@@ -22,6 +22,7 @@ ok_count = 0
 fail_count = 0
 
 
+
 def call(method, path, body=None, token=None):
     """发一个请求，返回 (HTTP 状态码, 解析后的响应体)。"""
     data = json.dumps(body).encode() if body is not None else None
@@ -40,6 +41,7 @@ def call(method, path, body=None, token=None):
             return e.code, raw
 
 
+
 def check(name, condition, detail=""):
     """打印一条 PASS / FAIL。"""
     global ok_count, fail_count
@@ -51,6 +53,7 @@ def check(name, condition, detail=""):
         print("  [FAIL] %s   %s" % (name, detail))
 
 
+
 def make_user(tag):
     """注册并登录一个临时账号，返回 (用户名, 密码, token)。"""
     un = "%s%d" % (tag, int(time.time() * 1000) % 1000000)
@@ -58,6 +61,7 @@ def make_user(tag):
     call("POST", "/api/auth/register", {"username": un, "password": pw})
     _, b = call("POST", "/api/auth/login", {"username": un, "password": pw})
     return un, pw, b["data"]["token"]
+
 
 
 def device_snapshot():
@@ -70,6 +74,7 @@ def device_snapshot():
         return [(d.id, d.owner_id) for d in s.query(Device).all()]
     finally:
         s.close()
+
 
 
 def user_state(uid):
@@ -85,6 +90,7 @@ def user_state(uid):
         s.close()
 
 
+
 def db_username(uid):
     """库里真实的 username（可能已是 ~del~ 占位）。"""
     from app.db import SessionLocal
@@ -96,6 +102,7 @@ def db_username(uid):
         return u.username if u else None
     finally:
         s.close()
+
 
 
 def give_device(un, uid):
@@ -111,6 +118,7 @@ def give_device(un, uid):
         return d.id
     finally:
         s.close()
+
 
 
 def restore_devices(before):
@@ -129,7 +137,9 @@ def restore_devices(before):
         s.close()
 
 
+
 def main():
+    """依次跑失败分支、带空格、正常注销与连带效果，最后还原设备归属并汇总结果。"""
     print("=" * 60)
     print("注销账号接口验收")
     print("=" * 60)

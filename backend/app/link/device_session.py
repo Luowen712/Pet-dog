@@ -88,7 +88,10 @@ class SessionError(Exception):
 class SessionNotReadyError(SessionError):
     """设备未处于可接受控制的状态（如 offline / recovery_required / handover_required / busy）。"""
 
+
+
     def __init__(self, control_state: str, message: str) -> None:
+        """记录当前控制态，供上层拼出错误原因。"""
         super().__init__(message)
         self.control_state = control_state
 
@@ -102,13 +105,20 @@ class SeqExhaustedError(SessionError):
 class SessionFaultedError(SessionError):
     """会话因 DB/串口/锁丢失进入故障态，禁止新发送。"""
 
+
+
     def __init__(self, reason: str) -> None:
+        """记录故障原因，便于日志与诊断。"""
         super().__init__(f"设备会话已故障（{reason}），停止发送")
         self.reason = reason
 
 
 class _SystemClock:
+
+
+
     def monotonic(self) -> float:
+        """读取系统单调时钟。"""
         return time.monotonic()
 
 
@@ -165,6 +175,8 @@ SessionFactory = Callable[[], Session]
 class DeviceSession:
     """单设备的唯一运行时会话。"""
 
+
+
     def __init__(
         self,
         device_pk: int,
@@ -181,6 +193,7 @@ class DeviceSession:
         on_event: EventCallback | None = None,
         supported_actions: tuple[int, ...] = SUPPORTED_CORE_ACTIONS,
     ) -> None:
+        """初始化会话标识、序号、待确认指令表与状态缓存。"""
         self._device_pk = device_pk
         self._session_factory = session_factory
         self._link = link
@@ -241,34 +254,54 @@ class DeviceSession:
 
     # --- 只读属性 ---
 
+
+
     @property
     def device_pk(self) -> int:
+        """返回设备主键。"""
         return self._device_pk
+
+
 
     @property
     def session_id(self) -> str:
+        """返回当前会话 ID。"""
         with self._mu:
             return self._session_id
 
+
+
     @property
     def be(self) -> int:
+        """返回当前绑定纪元。"""
         with self._mu:
             return self._be
 
+
+
     @property
     def last_seq(self) -> int:
+        """返回本会话已用到的最大指令序号。"""
         with self._mu:
             return self._last_seq
 
+
+
     @property
     def remaining_seq(self) -> int:
+        """返回本会话剩余可用序号数量。"""
         with self._mu:
             return max(0, MAX_SEQ - self._last_seq)
 
+
+
     @property
     def online(self) -> bool:
+        """设备是否在线（9 秒内有有效上行）。"""
         with self._mu:
             return self._online
+
+
 
     @property
     def needs_initial_status(self) -> bool:
@@ -287,8 +320,11 @@ class DeviceSession:
 
     @property
     def pending_seqs(self) -> dict[int, PendingSlot]:
+        """返回待确认指令表的副本。"""
         with self._mu:
             return dict(self._pending)
+
+
 
     @property
     def control_state(self) -> str:
@@ -314,7 +350,10 @@ class DeviceSession:
                 return "ready"
             return "unconfigured"
 
+
+
     def snapshot(self) -> SessionSnapshot:
+        """生成对外的只读状态快照。"""
         with self._mu:
             return SessionSnapshot(
                 device_pk=self._device_pk,
@@ -337,12 +376,17 @@ class DeviceSession:
                 supported_actions=self._supported_actions,
             )
 
+
+
     def set_loop(self, loop: asyncio.AbstractEventLoop | None) -> None:
+        """绑定事件循环，并把循环同步给链路层的回调。"""
         self._loop = loop
         if loop is not None:
             self._link.set_callbacks(loop=loop)
 
     # --- 生命周期 ---
+
+
 
     def start(self) -> None:
         """启动会话（BA02 第 3 条）：
@@ -487,6 +531,8 @@ class DeviceSession:
             self._link.start()
             self._started = True
 
+
+
     def close(self, timeout: float = 2.0) -> None:
         """关闭顺序（BA02 第 5 条）：先拒新操作 → 停写等在途退出并关串口 → 关闭会话记录。"""
         with self._mu:
@@ -512,6 +558,8 @@ class DeviceSession:
             self._close_session_record(rec_id)
 
     # --- 下行控制 ---
+
+
 
     def send_motion(
         self,
@@ -602,6 +650,7 @@ class DeviceSession:
 
             def _handle_motion_write(outcome: WriteOutcome) -> None:
                 # 06:116 确定未写失败可释放运动槽；可能部分写保持 recovery_required
+                """写入结果回调：确定未写就释放运动槽，部分写转不确定并置恢复态。"""
                 with self._mu:
                     if outcome.transport == TRANSPORT_WRITE_FAILED:
                         cur = self._pending.get(next_seq)
@@ -634,6 +683,8 @@ class DeviceSession:
                 raise
 
             return next_seq
+
+
 
     def send_face(
         self,
@@ -674,13 +725,14 @@ class DeviceSession:
             )
 
     def _cancel_poll_timer_locked(self) -> None:
+        """取消待触发的延迟状态轮询定时器（调用方需持锁）。"""
         timer = self._poll_timer
         self._poll_timer = None
         if timer is not None:
             timer.cancel()
 
     def _request_status_poll_locked(self) -> None:
-        """催一次 0x06 拉新状态，避免网页苦等 5 秒周期；
+        """催一次 0x06 拉新状态（0x07 表情写线成功后也走这里），避免网页苦等 5 秒周期；
         若仍在 1 秒冷却窗内则合并调度一次延迟 0x06，遵守 06 第 12.2 节。"""
         if self._closing or self._faulted:
             return
@@ -709,10 +761,15 @@ class DeviceSession:
             self._poll_timer = timer
             timer.start()
 
+
+
     def _on_deferred_poll_timer(self) -> None:
+        """冷却窗结束后补发一次状态轮询；会话已关闭或故障则丢弃。"""
         with self._mu:
             self._poll_timer = None
             self._request_status_poll_locked()
+
+
 
     def send_heartbeat(self, *, on_write: WriteCallback | None = None) -> bool:
         """入队 0x04 心跳请求（合并且优先于用户写）。"""
@@ -722,6 +779,8 @@ class DeviceSession:
             return self._link.enqueue_heartbeat(
                 build(CMD_HEARTBEAT_REQ), on_done=on_write
             )
+
+
 
     def poll_status(self, *, on_write: WriteCallback | None = None) -> bool:
         """入队 0x06 催状态（系统帧，不占 SendGate），遵守 06 第 12.2 节至少间隔 1 秒规则。"""
@@ -742,7 +801,10 @@ class DeviceSession:
             self._last_poll_sent_at = now
             return True
 
+
+
     def check_command_timeout(self) -> None:
+        """扫描待确认指令，超过期限的置为不确定并上报 unknown 事件。"""
         with self._mu:
             now = self._clock.monotonic()
             for seq, slot in list(self._pending.items()):
@@ -759,9 +821,14 @@ class DeviceSession:
                         'cmd_id': slot.cmd_id, 'seq': seq,
                         'reason': 'done_timeout' if slot.accepted else 'ack_timeout'}))
 
+
+
     def fail_closed(self, reason: str) -> None:
+        """外部触发的失败关闭：先转故障态再关链路。"""
         self._on_link_fault(reason)
         self._link.close(timeout=.5)
+
+
 
     def check_uplink_timeout(self) -> bool:
         """按 06 第 12.1 / 12.3 节检查 9 秒无有效上行超时。
@@ -818,8 +885,11 @@ class DeviceSession:
 
     # --- 接收处理（绑定 asyncio loop 时经 call_soon_threadsafe 在事件循环线程执行） ---
 
+
+
     def _on_frame(self, frame: Frame, received_at: float) -> None:
         # 06 §12.1：仅设备→主机有效帧刷新上行；忽略主机下行命令（防止 loop:// 或 RX-TX 短接误判在线）
+        """接收入口：刷新上行时刻，再按命令字分发到各处理器。"""
         if frame.cmd not in (CMD_STATUS, CMD_HEARTBEAT_ACK, CMD_ACCEPTED, CMD_DONE, CMD_REJECT):
             return
 
@@ -873,7 +943,10 @@ class DeviceSession:
         if event is not None:
             self._emit(event)
 
+
+
     def _handle_status_locked(self, data: bytes, received_at: float) -> SessionEvent:
+        """解析 0x03 状态帧并更新缓存；长度异常只计数并把状态字段置空。"""
         if len(data) in (6, 9):
             first_snapshot = not self._snapshot_received
             parsed = decode_status(data)
@@ -964,7 +1037,10 @@ class DeviceSession:
             },
         )
 
+
+
     def _handle_accepted_locked(self, data: bytes, received_at: float) -> SessionEvent:
+        """处理 0x81 受理帧：命中待确认序号则标记已受理并延长完成期限。"""
         if len(data) != 2 or data[0] != CMD_ACTION:
             self.orphan_frames += 1
             return SessionEvent(
@@ -989,7 +1065,10 @@ class DeviceSession:
             {"cmd_id": slot.cmd_id, "seq": seq, "action": slot.action},
         )
 
+
+
     def _handle_done_locked(self, data: bytes, received_at: float) -> SessionEvent:
+        """处理 0x02 完成帧：序号与动作都匹配才移除待确认项并上报 done。"""
         if len(data) != 2:
             self.orphan_frames += 1
             return SessionEvent(
@@ -1019,7 +1098,10 @@ class DeviceSession:
             {"cmd_id": slot.cmd_id, "seq": seq, "action": action},
         )
 
+
+
     def _handle_rejected_locked(self, data: bytes, received_at: float) -> SessionEvent:
+        """处理 0x05 拒绝帧：移除待确认项并上报错误码。"""
         if len(data) != 2:
             self.orphan_frames += 1
             return SessionEvent(
@@ -1049,6 +1131,8 @@ class DeviceSession:
                 "error_code": error_code,
             },
         )
+
+
 
     def _on_revoke(self, event: RevokeEvent) -> None:
         """SendGate 撤销后清理本设备缓存、隔离 (device, be, session) 并轮换会话（06 §9 / S01）。"""
@@ -1106,6 +1190,8 @@ class DeviceSession:
             if orphan_rec_id is not None:
                 self._close_session_record(orphan_rec_id)
 
+
+
     def _rotate_session_after_timeout(self) -> None:
         """06:358 有效上行恢复后新建 session_id，序号与 state_revision 归零重新计数。
 
@@ -1132,6 +1218,7 @@ class DeviceSession:
             loop = self._loop
 
         def _persist_new_record() -> None:
+            """在后台线程落库新会话记录，完成后置位就绪事件。"""
             orphan_rec_id: int | None = None
             try:
                 new_rec_id = self._open_session_record(be, new_sid)
@@ -1155,7 +1242,10 @@ class DeviceSession:
                 pass
         _persist_new_record()
 
+
+
     def _clear_cached_status_locked(self) -> None:
+        """清空全部状态缓存，未知字段一律回到 None。"""
         self._battery = None
         self._voltage = None
         self._action = None
@@ -1167,7 +1257,10 @@ class DeviceSession:
         self._weather_code = None
         self._temp = None
 
+
+
     def _on_link_fault(self, reason: str) -> None:
+        """链路故障回调：把会话转故障态并上报 fault 事件。"""
         logger.warning("设备会话进入故障态：device_pk=%s reason=%s", self._device_pk, reason)
         self._enter_fault(reason)
         self._emit(
@@ -1181,7 +1274,10 @@ class DeviceSession:
 
     # --- 内部工具 ---
 
+
+
     def _assert_writable_locked(self) -> None:
+        """写操作前置断言：已关闭、已故障或未启动时抛对应异常。"""
         if self._closing:
             raise LinkClosedError("设备会话正在关闭，拒绝新操作")
         if self._faulted or self._link.faulted:
@@ -1191,6 +1287,8 @@ class DeviceSession:
         if not self._started:
             raise SessionNotReadyError("unconfigured", "设备会话尚未启动")
 
+
+
     def _ensure_db_lock_or_fault(self) -> None:
         """锁外验 DB 实例锁：失锁时先标 faulted 再关串口，绝不在持有 self._mu 时 join 线程。"""
         if self._process_lock is not None and not self._process_lock.still_held():
@@ -1198,7 +1296,10 @@ class DeviceSession:
             self._link.close(timeout=0.5)
             raise SessionFaultedError("db_lock_lost")
 
+
+
     def _enter_fault(self, reason: str) -> None:
+        """把会话切到故障态并记录首次原因。"""
         with self._mu:
             self._cancel_poll_timer_locked()
             self._desired_face = None
@@ -1207,7 +1308,10 @@ class DeviceSession:
                 self._fault_reason = reason
                 self._state_revision += 1
 
+
+
     def _open_session_record(self, be: int, session_id: str) -> int | None:
+        """新建一条 open 状态会话记录并返回主键；写库失败转故障态。"""
         db = self._session_factory()
         try:
             rec = DeviceSessionRecord(
@@ -1229,7 +1333,10 @@ class DeviceSession:
         finally:
             db.close()
 
+
+
     def _close_session_record(self, rec_id: int) -> None:
+        """把会话记录置为 closed；写库失败只记日志。"""
         db = self._session_factory()
         try:
             rec = (
@@ -1246,6 +1353,8 @@ class DeviceSession:
             logger.exception("关闭 DeviceSessionRecord 时写库失败")
         finally:
             db.close()
+
+
 
     def _persist_last_seq(self, rec_id: int | None, seq: int) -> None:
         """在 write 前把 last_seq 持久化到 DeviceSessionRecord（锁外执行）；DB 异常立刻 faulted。"""
@@ -1269,7 +1378,10 @@ class DeviceSession:
         finally:
             db.close()
 
+
+
     def _mark_commands_unknown(self, cmd_ids: list[str], sid: str, *, reason: str) -> None:
+        """把指定指令批量置为 unknown 并写明原因。"""
         db = self._session_factory()
         try:
             rows = (
@@ -1295,6 +1407,8 @@ class DeviceSession:
             logger.exception("超时标记命令为 unknown 时写库失败")
         finally:
             db.close()
+
+
 
     def _emit(self, event: SessionEvent) -> None:
         """06:185 事件统一在绑定的事件循环线程送达。
@@ -1322,7 +1436,10 @@ class DeviceSession:
             pass
         self._run_event_callback(event)
 
+
+
     def _run_event_callback(self, event: SessionEvent) -> None:
+        """真正调用事件回调，回调异常只记日志不外抛。"""
         if self._on_event is None:
             return
         try:

@@ -33,7 +33,9 @@ router = APIRouter(prefix="/api/devices", tags=["设备"])
 CST = timezone(timedelta(hours=8))
 
 
+
 def to_iso(dt: datetime | None) -> str | None:
+    """把库里的本地时间补上 +08:00 时区后转成 ISO 字符串，None 原样返回。"""
     if dt is None:
         return None
     if dt.tzinfo is None:
@@ -46,14 +48,15 @@ class RenameIn(BaseModel):
 
 
 
-
 def _live_session(request: Request | None, device_pk: int):
+    """取该设备当前的在线会话；设备不匹配或进程未启动会话时返回 None。"""
     if request is None:
         return None
     sess = getattr(request.app.state, "device_session", None)
     if sess is not None and sess.device_pk == device_pk:
         return sess
     return None
+
 
 
 def device_out(
@@ -63,6 +66,7 @@ def device_out(
     *,
     session=None,
 ) -> dict:
+    """把设备行拼成前端展示结构，有实时会话时优先用会话快照。"""
     snap = session.snapshot() if session is not None else None
     if snap is not None and snap.be != d.be:
         snap = None
@@ -94,6 +98,7 @@ def device_out(
     }
 
 
+
 # 获取设备列表，供页面显示和选择设备
 @router.get("")
 def list_devices(
@@ -101,6 +106,7 @@ def list_devices(
     user: dict = Depends(current_user),
     db: Session = Depends(get_db),
 ):
+    """列出当前用户名下的设备，附带最新遥测与在线状态。"""
     devices = db.query(Device).filter(Device.owner_id == user.get("uid")).all()
     tmap = latest_telemetry_map(db, devices)
     at = datetime.now()
@@ -116,8 +122,10 @@ def list_devices(
     return ok(data)
 
 
+
 @router.get("/ble/scan")
 async def scan_ble(request: Request, user: dict = Depends(current_user)):
+    """按用户限流后扫描附近蓝牙设备，并过滤掉已归属他人的设备。"""
     uid = user.get("uid")
     bucket = f"ble_scan:{uid}"
     wait = ratelimit.check(bucket, 20, 60)
@@ -132,6 +140,7 @@ async def scan_ble(request: Request, user: dict = Depends(current_user)):
         return fail(40900, str(exc))
 
     def _filter():
+        """在线程里查库过滤候选设备，避免阻塞事件循环。"""
         with SessionLocal() as db:
             return ble_service.filter_ble_candidates(db, uid, candidates)
 
@@ -144,6 +153,7 @@ class BleConnectIn(BaseModel):
     name: str | None = None
 
 
+
 # 低功耗蓝牙直接连接并绑定当前账号（取消 6 位配对码流程，见 06 第 12.7 节）
 @router.post("/ble/connect")
 async def connect_ble(
@@ -151,6 +161,7 @@ async def connect_ble(
     request: Request,
     user: dict = Depends(current_user),
 ):
+    """蓝牙直连并绑定当前账号，取代 6 位配对码流程。"""
     uid = user.get("uid")
     try:
         addr = ble_service.normalize_ble_address(body.address)
@@ -163,9 +174,11 @@ async def connect_ble(
     sim_mode = ble_service.is_sim_mode()
 
     async def _run_connect():
+        """执行完整连接流程：预检、开串口、绑定落库，按需启动设备会话。"""
         cur_session = getattr(request.app.state, "device_session", None)
 
         def _precheck():
+            """连接前只读预检：账号可用、设备可绑、主机蓝牙链路未被他人占用。"""
             with SessionLocal() as db:
                 existing_row = ble_service.precheck_ble_bind(db, uid, addr)
                 if cur_session is not None and (
@@ -227,6 +240,7 @@ async def connect_ble(
                 return fail(40900, f"蓝牙连接失败：{exc}")
 
         def _bind():
+            """在线程里完成绑定，并顺带取回最新电量。"""
             with SessionLocal() as db:
                 d, _ = ble_service.bind_ble_device(db, uid, addr, clean_name)
                 bat = battery_of(latest_telemetry(db, d))
@@ -259,6 +273,7 @@ async def connect_ble(
     return await _run_connect()
 
 
+
 # 获取单台设备的完整信息
 @router.get("/{id}")
 def get_device(
@@ -267,6 +282,7 @@ def get_device(
     user: dict = Depends(current_user),
     db: Session = Depends(get_db),
 ):
+    """查询自己名下单台设备的详细信息。"""
     d = get_owned_device(db, user.get("uid"), id)
     if not d:
         return fail(40400, "设备不存在")
@@ -279,6 +295,7 @@ def get_device(
     )
 
 
+
 # 	修改设备名字
 @router.patch("/{id}")
 def rename_device(
@@ -288,6 +305,7 @@ def rename_device(
     user: dict = Depends(current_user),
     db: Session = Depends(get_db),
 ):
+    """修改设备名字，长度须在 1–64 个字符之间。"""
     d = get_owned_device(db, user.get("uid"), id)
     if not d:
         return fail(40400, "设备不存在")
@@ -310,10 +328,10 @@ def rename_device(
 
 
 
-
 # 获取当前选中设备的实时状态快照
 @router.get('/{id}/status')
 def get_device_status(id: int, request: Request, user: dict = Depends(current_user), db: Session = Depends(get_db)):
+    """返回设备实时状态快照，没有在线会话时回落到最新遥测。"""
     d = get_owned_device(db, user['uid'], id)
     if not d:
         return fail(40400, '设备不存在')
@@ -340,6 +358,7 @@ class BindingDeleteIn(BaseModel):
     confirm_device_id: int
 
 
+
 # 解绑设备（06:78、06:296）
 @router.delete("/{id}/binding")
 async def unbind_device(
@@ -350,11 +369,13 @@ async def unbind_device(
 ):
     # 先判参数、再判归属、最后判状态。顺序反过来的话，错误码的差异
     # 就成了「这个 id 到底存不存在」的探测器。
+    """解绑设备：递增绑定纪元、清空归属，并停掉该设备的会话。"""
     if body.confirm_device_id != id:
         return fail(40002, "确认设备 id 不匹配")
     uid = user.get("uid")
 
     def _unbind_tx():
+        """在门禁与事务内校验归属和状态后解绑，返回新的绑定纪元。"""
         with send_gate.hold(), SessionLocal() as db:
             d = get_owned_device(db, uid, id, for_update=True)
             if not d:
@@ -390,8 +411,11 @@ if settings.DEV_HEARTBEAT:
     class HeartbeatIn(BaseModel):
         device_id: str
 
+
+
     @router.post("/heartbeat")
     def heartbeat(body: HeartbeatIn, db: Session = Depends(get_db)):
+        """开发用心跳接口：刷新设备的最后在线时间。"""
         d = db.query(Device).filter(Device.device_id == body.device_id).first()
         if not d:
             return fail(40400, "设备不存在")

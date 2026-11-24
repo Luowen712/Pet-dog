@@ -16,8 +16,10 @@ _BUILTIN_FACES = (
 )
 
 
+
 @router.get("")
 def list_faces(user: dict = Depends(current_user)):
+    """返回内置表情列表，全部标记为 builtin，不查库。"""
     return ok(
         [
             {"id": fid, "name": name, "builtin": True, "preview": None}

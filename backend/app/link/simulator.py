@@ -47,22 +47,41 @@ class SimFaults:
 
 
 class Clock(Protocol):
-    def monotonic(self) -> float: ...
+
+
+
+    def monotonic(self) -> float:
+        """单调时钟协议：只提供单调递增的秒数。"""
+        ...
 
 
 class _SystemClock:
+
+
+
     def monotonic(self) -> float:
+        """读取系统单调时钟。"""
         return time.monotonic()
 
 
 class FakeClock:
+
+
+
     def __init__(self) -> None:
+        """虚拟时间从 0 开始。"""
         self._t = 0.0
 
+
+
     def monotonic(self) -> float:
+        """返回被测试推进到的当前时刻。"""
         return self._t
 
+
+
     def advance(self, seconds: float) -> None:
+        """把虚拟时间往前推，负数直接拒绝。"""
         if seconds < 0:
             raise ValueError("时间不能倒退")
         self._t += seconds
@@ -86,8 +105,11 @@ class SimStats:
     rejected_overlong: int = 0
 
 
+
 def _opt(value: int) -> int | None:
+    """把 0xFF 视为「未知」解成 None，其余原样返回。"""
     return None if value == 0xFF else value
+
 
 
 def decode_status(data: bytes) -> dict:
@@ -117,6 +139,8 @@ def decode_status(data: bytes) -> dict:
 class SimulatedDevice:
     """设备侧替身。feed() 收字节，poll() 取已到期的出站帧。"""
 
+
+
     def __init__(
         self,
         clock: Clock | None = None,
@@ -124,6 +148,7 @@ class SimulatedDevice:
         status: bytes = DEFAULT_STATUS,
         periodic_status: bool = False,
     ) -> None:
+        """初始化解析器、出站队列、忙状态与模拟故障开关。"""
         self._clock: Clock = clock if clock is not None else _SystemClock()
         self._faults = faults if faults is not None else SimFaults()
         self._status = bytearray(status)
@@ -137,14 +162,22 @@ class SimulatedDevice:
 
     # --- 连接 ---
 
+
+
     @property
     def connected(self) -> bool:
+        """模拟设备当前是否在线。"""
         return self._connected
 
+
+
     def disconnect(self) -> None:
+        """标记模拟设备断线，之后的 I/O 都抛 SimDisconnected。"""
         self._connected = False
 
     # --- 收发 ---
+
+
 
     def feed(self, chunk: bytes) -> None:
         """主机→设备字节。断线时丢弃；坏帧由 Parser 吞掉，只计噪声。"""
@@ -159,7 +192,10 @@ class SimulatedDevice:
         for frame in frames:
             self._handle(frame, now)
 
+
+
     def poll(self) -> list[bytes]:
+        """取走所有到期的出站帧，按需补发周期状态帧。"""
         now = self._clock.monotonic()
         if self._connected and self._next_status is not None and now >= self._next_status:
             self._emit(now, build(CMD_STATUS, bytes(self._status)))
@@ -170,7 +206,10 @@ class SimulatedDevice:
 
     # --- 内部 ---
 
+
+
     def _emit(self, due_at: float, payload: bytes) -> None:
+        """按故障开关丢帧或改坏校验和后入队，并累计发送计数。"""
         cmd = payload[3]  # SOF(2) + LEN(1) 之后是 CMD
         if cmd == CMD_ACCEPTED and self._faults.drop_ack:
             self.stats.dropped += 1
@@ -184,7 +223,10 @@ class SimulatedDevice:
         self._out.append((due_at, payload))
         self.stats.frames_out += 1
 
+
+
     def _handle(self, frame: Frame, now: float) -> None:
+        """按命令字分发入站帧：心跳回 ACK、动作走受理流程、查询回状态。"""
         if frame.cmd == CMD_HEARTBEAT_REQ:
             self._emit(now, build(CMD_HEARTBEAT_ACK))
         elif frame.cmd == CMD_ACTION:
@@ -199,7 +241,10 @@ class SimulatedDevice:
         else:
             self.stats.unknown_cmd += 1
 
+
+
     def _on_action(self, data: bytes, now: float) -> None:
+        """处理动作帧：去重、校验支持的动作与忙状态，然后回受理和完成。"""
         if len(data) < 4:
             self.stats.malformed += 1  # 取不到 seq，按 06:281 不回 05
             return
@@ -264,27 +309,42 @@ class SimBytePort:
     打开且无数据时 read 立即返回 b""（timeout=0 的不阻塞语义）。
     """
 
+
+
     def __init__(self, device: SimulatedDevice) -> None:
+        """缓存模拟设备与接收缓冲区，初始为打开状态。"""
         self._device = device
         self._rx = bytearray()
         self._closed = False
 
+
+
     @property
     def is_open(self) -> bool:
+        """端口是否仍处于打开状态。"""
         return not self._closed
+
+
 
     @property
     def in_waiting(self) -> int:
+        """返回接收缓冲区可读字节数，先拉取新帧再统计。"""
         self._check_open()
         self._drain()
         return len(self._rx)
 
+
+
     def write(self, data: bytes) -> int:
+        """把字节喂给模拟设备，返回写入长度。"""
         self._check_open()
         self._device.feed(bytes(data))
         return len(data)
 
+
+
     def read(self, size: int = 1) -> bytes:
+        """按需读出指定长度数据，不够就先从设备拉取新帧。"""
         self._check_open()  # 真 pyserial 先判 is_open 再处理 size，关闭态 read(0) 也抛
         if size <= 0:
             return b""
@@ -294,23 +354,38 @@ class SimBytePort:
         del self._rx[:size]
         return chunk
 
+
+
     def flush(self) -> None:
+        """空实现，仅校验端口仍打开。"""
         self._check_open()
 
+
+
     def reset_input_buffer(self) -> None:
+        """清空接收缓冲区。"""
         self._check_open()
         self._rx.clear()
 
+
+
     def close(self) -> None:
+        """关闭端口，此后所有 I/O 都抛异常。"""
         self._closed = True
 
+
+
     def _check_open(self) -> None:
+        """端口已关闭或设备断线时抛 SimDisconnected。"""
         if self._closed:
             raise SimDisconnected("端口已关闭")
         if not self._device.connected:
             raise SimDisconnected("模拟设备已断开")
 
+
+
     def _drain(self) -> None:
+        """把模拟设备已产出的帧全部搬入接收缓冲区。"""
         while True:
             frames = self._device.poll()
             if not frames:

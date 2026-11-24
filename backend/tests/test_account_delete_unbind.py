@@ -30,11 +30,14 @@ USERNAME = "unbind_case"
 PASSWORD = "pw-123456"
 
 
+
 def _cleanup(db) -> None:
+    """清掉本用例建的设备与账号，保证可重复执行。"""
     db.query(Device).filter(Device.device_id == DEVICE_ID).delete()
     db.query(User).filter(User.username == USERNAME).delete()
     db.query(User).filter(User.username.like("~del~%unbind_case%")).delete()
     db.commit()
+
 
 
 def test_delete_account_unbinds_device_and_passes_check():

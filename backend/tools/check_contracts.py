@@ -36,11 +36,15 @@ UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]
 findings: list[tuple[str, str, str]] = []
 
 
+
 def report(severity: str, check: str, message: str) -> None:
+    """记录一条检查结论：级别、检查项与说明。"""
     findings.append((severity, check, message))
 
 
+
 def load_openapi() -> dict:
+    """读取并解析 openapi.yaml，缺失或解析失败记 ERROR 并返回空字典。"""
     if not OPENAPI.exists():
         report("ERROR", "openapi.exists", str(OPENAPI) + " 不存在")
         return {}
@@ -50,6 +54,7 @@ def load_openapi() -> dict:
         except yaml.YAMLError as exc:
             report("ERROR", "openapi.parse", "YAML 解析失败: " + str(exc))
             return {}
+
 
 
 def resolve(doc: dict, ref: str):
@@ -65,10 +70,13 @@ def resolve(doc: dict, ref: str):
     return node, None
 
 
+
 def check_refs(doc: dict) -> None:
+    """遍历文档校验所有 $ref 可解析，并确认文档里确实存在引用。"""
     total = 0
 
     def walk(node):
+        """递归遍历节点，逐个校验其中的 $ref。"""
         nonlocal total
         if isinstance(node, dict):
             ref = node.get("$ref")
@@ -88,12 +96,17 @@ def check_refs(doc: dict) -> None:
         report("ERROR", "openapi.ref", "文档里没有任何引用，明显不是这份 openapi.yaml")
 
 
+
 def is_int(value) -> bool:
+    """判断是否为真正的整数（排除 bool）。"""
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+
 def is_number(value) -> bool:
+    """判断是否为数字（排除 bool）。"""
     return isinstance(value, (int, float)) and not isinstance(value, bool)
+
 
 
 def validate(instance, schema, doc: dict, path: str) -> None:
@@ -176,7 +189,9 @@ def validate(instance, schema, doc: dict, path: str) -> None:
             report("ERROR", "schema.exclusiveMinimum", path + " 必须大于 " + str(ex_min))
 
 
+
 def path_pattern(template: str) -> re.Pattern:
+    """把带 {参数} 的路径模板编译成正则。"""
     parts = re.split(r"(\{[^}]+\})", template)
     out = []
     for part in parts:
@@ -185,6 +200,7 @@ def path_pattern(template: str) -> re.Pattern:
         else:
             out.append(re.escape(part))
     return re.compile("^" + "".join(out) + "$")
+
 
 
 def openapi_operations(doc: dict) -> dict:
@@ -200,7 +216,9 @@ def openapi_operations(doc: dict) -> dict:
     return ops
 
 
+
 def match_path(ops: dict, method: str, concrete: str):
+    """按方法在 operation 表里找出能匹配具体路径的模板项。"""
     for (op_method, template), op in ops.items():
         if op_method != method:
             continue
@@ -209,7 +227,9 @@ def match_path(ops: dict, method: str, concrete: str):
     return None, None
 
 
+
 def check_operations(doc: dict, ops: dict) -> None:
+    """校验每个操作的状态标记、operationId 唯一性与 responses 是否齐备。"""
     ids = set()
     for (method, path), op in ops.items():
         label = method + " " + path
@@ -231,7 +251,9 @@ def check_operations(doc: dict, ops: dict) -> None:
         report("ERROR", "openapi.version", "openapi 字段应为 3.0.3，实际 " + str(doc.get("openapi")))
 
 
+
 def check_06_endpoints(doc: dict, ops: dict) -> None:
+    """比对 06 端点表与 openapi 的路径覆盖，并核对 WS 端点声明。"""
     if not PLAN_06.exists():
         report("ERROR", "plan06.exists", str(PLAN_06) + " 不存在")
         return
@@ -271,7 +293,9 @@ def check_06_endpoints(doc: dict, ops: dict) -> None:
         report("ERROR", "openapi.ws", "握手查询参数应为 device_id 与 ticket，实际 " + str(sorted(query_names)))
 
 
+
 def iter_json(directory: Path):
+    """遍历目录下的 JSON 样例，解析失败记 ERROR 并跳过。"""
     if not directory.exists():
         report("ERROR", "fixtures.exists", str(directory) + " 不存在")
         return
@@ -283,7 +307,9 @@ def iter_json(directory: Path):
             report("ERROR", "fixtures.parse", path.name + " JSON 解析失败: " + str(exc))
 
 
+
 def check_http_fixtures(doc: dict, ops: dict) -> None:
+    """校验 HTTP 样例的字段、响应引用、状态码与统一响应外壳约束。"""
     responses = (doc.get("components") or {}).get("responses") or {}
     count = 0
     for path, fixture in iter_json(FIXTURES / "http"):
@@ -325,7 +351,9 @@ def check_http_fixtures(doc: dict, ops: dict) -> None:
         report("ERROR", "fixtures.http", "没有任何 HTTP 样例")
 
 
+
 def check_ws_fixtures(doc: dict) -> None:
+    """校验 WS 样例的事件覆盖情况与关闭码清单。"""
     schemas = (doc.get("components") or {}).get("schemas") or {}
     event_schema = schemas.get("WsEvent")
     if event_schema is None:
@@ -369,11 +397,15 @@ def check_ws_fixtures(doc: dict) -> None:
         report("ERROR", "fixtures.close_codes", "4001 不得再作为关闭码出现（06:157）")
 
 
+
 def frame_bytes(hex_text: str) -> list[int]:
+    """把 16 进制文本解析成字节值列表。"""
     return [int(token, 16) for token in hex_text.split()]
 
 
+
 def check_sum(values: list[int]) -> tuple[bool, str]:
+    """按协议校验一帧的帧头、长度与校验和，返回（是否合法，说明）。"""
     if len(values) < 5:
         return False, "长度不足 5 字节"
     if values[0] != 0xAA or values[1] != 0x55:
@@ -393,7 +425,9 @@ def check_sum(values: list[int]) -> tuple[bool, str]:
     return True, "0x" + format(expected, "02X")
 
 
+
 def check_frames() -> None:
+    """校验串口帧样例的校验和、长度与字段是否自洽。"""
     count = 0
     for path, fixture in iter_json(FIXTURES / "frames"):
         if "cases" in fixture:
@@ -426,7 +460,9 @@ def check_frames() -> None:
         report("ERROR", "fixtures.frames", "没有任何串口帧样例")
 
 
+
 def frontend_interfaces(source: str) -> dict:
+    """从前端类型文件里提取各 interface 的字段名集合。"""
     result = {}
     for match in re.finditer(r"export interface (\w+)\s*\{(.*?)\n\}", source, re.S):
         body = match.group(2)
@@ -439,7 +475,9 @@ def frontend_interfaces(source: str) -> dict:
     return result
 
 
+
 def check_frontend_types(doc: dict) -> None:
+    """比对 openapi 与前端类型定义，缺字段只记 WARN。"""
     schemas = (doc.get("components") or {}).get("schemas") or {}
     if not FRONTEND_TYPES.exists():
         report("ERROR", "frontend.exists", str(FRONTEND_TYPES) + " 不存在")
@@ -466,7 +504,9 @@ def check_frontend_types(doc: dict) -> None:
             report("WARN", "frontend.type", "WsEvent 联合类型缺事件: " + ", ".join(missing))
 
 
+
 def main() -> int:
+    """按顺序跑完全部契约检查，并按结果返回退出码。"""
     parser = argparse.ArgumentParser(description="J00 契约一致性检查")
     parser.add_argument("--strict", action="store_true", help="WARN 也视为失败")
     parser.add_argument("--verbose", action="store_true", help="逐条打印")

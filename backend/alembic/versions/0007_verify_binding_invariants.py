@@ -169,9 +169,11 @@ CHECKS: list[tuple[str, str, str]] = [
 ]
 
 
+
 def _count(bind, sql: str) -> int:
     """执行只读查询，返回单行单列的数字。"""
     return int(bind.execute(sa.text(sql)).scalar_one())
+
 
 
 def _assert_zero(bind, sql: str, label: str, fail_msg: str) -> None:
@@ -186,12 +188,14 @@ def _assert_zero(bind, sql: str, label: str, fail_msg: str) -> None:
     print(f"[验数通过] {label}")
 
 
+
 def upgrade() -> None:
     """执行全部只读检查，全过才允许进 0008。"""
     bind = op.get_bind()
     for sql, label, fail_msg in CHECKS:
         _assert_zero(bind, sql, label, fail_msg)
     print(f"[验数] {len(CHECKS)} 项检查全部通过，可以进入 0008 加约束")
+
 
 
 def downgrade() -> None:

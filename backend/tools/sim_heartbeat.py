@@ -21,7 +21,9 @@ INTERVAL = 10  # 秒；必须小于 config.ONLINE_TTL_SEC，否则会来回抖�
 DEFAULT_DEVICES = ["PET-0001-ABCD", "PET-0002-EFGH"]
 
 
+
 def beat(device_id: str) -> str:
+    """给指定设备发一次心跳，返回在线状态摘要。"""
     body = json.dumps({"device_id": device_id, "battery": 80}).encode()
     req = urllib.request.Request(
         URL, data=body, headers={"Content-Type": "application/json"}
@@ -31,7 +33,9 @@ def beat(device_id: str) -> str:
         return f"online={data['online']} last={data['last_heartbeat']}"
 
 
+
 def main() -> None:
+    """按固定间隔循环给设备发心跳，Ctrl+C 退出。"""
     devices = sys.argv[1:] or DEFAULT_DEVICES
     print(f"heartbeat every {INTERVAL}s -> {URL}")
     print(f"devices: {', '.join(devices)}")

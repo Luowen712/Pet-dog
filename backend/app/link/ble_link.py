@@ -71,7 +71,9 @@ class BleCandidate:
     transport: str = "ble"
 
 
+
 def norm_uuid(raw: str) -> str:
+    """把 4 位短 UUID 补全成 128 位标准形式，其余只做去空格与小写。"""
     s = raw.strip().lower()
     if s.startswith("0x"):
         s = s[2:]
@@ -80,7 +82,9 @@ def norm_uuid(raw: str) -> str:
     return s
 
 
+
 def _import_bleak():
+    """延迟导入 bleak；未安装则抛 BleUnavailableError 并提示替代方案。"""
     try:
         from bleak import BleakClient, BleakScanner
 
@@ -89,6 +93,7 @@ def _import_bleak():
         raise BleUnavailableError(
             "未安装 bleak，无法使用低功耗蓝牙；请安装 bleak 或改用 SERIAL_PORT=sim"
         ) from exc
+
 
 
 def resolve_gatt_chars(
@@ -115,6 +120,7 @@ def resolve_gatt_chars(
         return want_notify, want_write, True
 
     def props_of(ch) -> set[str]:
+        """把特征属性集合统一转成小写字符串集合。"""
         return {str(p).lower() for p in (getattr(ch, "properties", ()) or ())}
 
     notify_char = next(
@@ -142,6 +148,7 @@ def resolve_gatt_chars(
 
     use_response = "write-without-response" not in props_of(write_char)
     return str(notify_char.uuid), str(write_char.uuid), use_response
+
 
 
 async def scan_ble_devices(
@@ -206,6 +213,8 @@ async def scan_ble_devices(
 class BleBytePort:
     """将 bleak 异步 GATT 透传包装为同步 BytePort，供 SerialLink 单线程 I/O 使用。"""
 
+
+
     def __init__(
         self,
         address: str,
@@ -218,6 +227,7 @@ class BleBytePort:
         connect_timeout: float = 15.0,
         client_factory: Callable[..., Any] | None = None,
     ) -> None:
+        """起独立事件循环线程并在其中完成 BLE 连接，失败立即关闭。"""
         self.address = address.strip()
         if not self.address:
             raise SerialException("BLE 地址不能为空")
@@ -256,13 +266,19 @@ class BleBytePort:
                 raise
             raise SerialException(f"BLE 连接失败（{self.address}）：{exc}") from exc
 
+
+
     def _run_loop(self) -> None:
+        """事件循环线程主体：绑定循环、通知就绪后常驻运行。"""
         asyncio.set_event_loop(self._loop)
         self._loop.call_soon(self._ready.set)
         self._loop.run_forever()
         self._loop.close()
 
+
+
     def _submit(self, coro, *, timeout: float):
+        """把协程投到 BLE 事件循环并同步等结果，超时抛 SerialTimeoutException。"""
         if not self._loop.is_running():
             coro.close()
             raise SerialException("BLE 事件循环已关闭")
@@ -278,17 +294,22 @@ class BleBytePort:
                     pass
             raise SerialTimeoutException("BLE 操作超时") from exc
 
+
+
     def _on_disconnect(self, _client: Any) -> None:
+        """断线回调：标记端口已关闭并记录断线。"""
         with self._mu:
             self._open = False
             self._disconnected = True
         logger.warning("BLE 设备已断开：%s", self.address)
 
     def set_rx_callback(self, callback: Callable[[], None] | None) -> None:
+        """注册收帧回调：Notify 到达时立即唤醒读线程，避免等满帧间隔。"""
         with self._mu:
             self._rx_callback = callback
 
     def _on_notify(self, _sender: Any, data: bytearray | bytes) -> None:
+        """通知回调：把收到的字节追加进接收缓冲区。"""
         if not data:
             return
         with self._mu:
@@ -298,6 +319,7 @@ class BleBytePort:
             cb()
 
     async def _safe_disconnect(self, client: Any) -> None:
+        """安全断连：停通知、断连并释放残留的 WinRT 会话对象，异常一律忽略。"""
         if client is None:
             return
         try:
@@ -329,7 +351,10 @@ class BleBytePort:
         except Exception:
             pass
 
+
+
     async def _connect_once(self, factory: Callable[..., Any], target: Any, budget: float) -> Any:
+        """异步建连：解析透传特征、订阅通知，成功后标记端口已打开。"""
         client = factory(
             target,
             disconnected_callback=self._on_disconnect,
@@ -415,7 +440,10 @@ class BleBytePort:
             self._client = None
             raise
 
+
+
     async def _async_write_chunk(self, chunk: bytes) -> None:
+        """把一片数据写到 Write 特征，是否带响应由连接时探测结果决定。"""
         client = self._client
         if client is None:
             raise SerialException("BLE 端口已关闭")
@@ -431,7 +459,10 @@ class BleBytePort:
                 f"BLE 写入超时（>{self._write_timeout:.1f}s）"
             ) from exc
 
+
+
     async def _async_close(self) -> None:
+        """异步断开：先停通知再断连，过程中的异常一律忽略。"""
         client = self._client
         self._client = None
         await self._safe_disconnect(client)
@@ -448,12 +479,18 @@ class BleBytePort:
             except Exception:
                 pass
 
+
+
     @property
     def is_open(self) -> bool:
+        """端口是否已经连上并打开。"""
         with self._mu:
             return self._open
 
+
+
     def read(self, size: int = 1) -> bytes:
+        """从接收缓冲区取数据；端口关闭或已断开时抛 SerialException。"""
         with self._mu:
             if not self._open:
                 raise SerialException(
@@ -466,7 +503,10 @@ class BleBytePort:
             del self._rx[:n]
             return out
 
+
+
     def write(self, data: bytes) -> int:
+        """按 MTU 切片写入，分片中途中失败按部分写上报。"""
         if not self.is_open:
             raise SerialException("BLE 端口未打开或已断开")
         if not data:
@@ -490,11 +530,17 @@ class BleBytePort:
             written += len(chunk)
         return written
 
+
+
     def flush(self) -> None:
+        """空实现，仅校验端口仍打开。"""
         if not self.is_open:
             raise SerialException("BLE 端口已关闭")
 
+
+
     def close(self) -> None:
+        """先关连接再停事件循环，最后回收线程。"""
         with self._mu:
             self._open = False
             self._rx_callback = None

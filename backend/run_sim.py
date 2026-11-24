@@ -18,13 +18,16 @@ PORT = 33317
 DB = 'pet_dog_sim'
 
 
+
 async def serve_sim(stop):
+    """拉起本机 uvicorn 服务，并监视停止标记以优雅退出。"""
     import uvicorn
     from app.main import app
     app.state.host_lock_path = HOME / 'sim-host.lock'
     server = uvicorn.Server(uvicorn.Config(app, host='127.0.0.1', port=8000,
                             access_log=False, ws_ping_interval=20, ws_ping_timeout=10))
     async def watch_stop():
+        """轮询停止标记文件，出现即请求服务退出。"""
         while not stop.exists():
             await asyncio.sleep(.5)
         server.should_exit = True
@@ -36,7 +39,9 @@ async def serve_sim(stop):
         await asyncio.gather(watcher, return_exceptions=True)
 
 
+
 def main():
+    """准备独立的本机 MySQL 实例并启动 SIM 后端；带 --stop 时只投递停止标记。"""
     stop = HOME / 'stop.request'
     if sys.argv[1:] == ['--stop']:
         if HOME.is_dir():

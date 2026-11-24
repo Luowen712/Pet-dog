@@ -18,9 +18,11 @@ _PHC_PREFIX = "$argon2id$"
 _hasher = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=4)
 
 
+
 def hash_pwd(raw: str) -> str:
     """生成 Argon2id 哈希。盐和参数都编码在返回值里，不需要额外存储。"""
     return _hasher.hash(raw)
+
 
 
 def _is_legacy_hash(stored: str) -> bool:
@@ -34,10 +36,12 @@ def _is_legacy_hash(stored: str) -> bool:
     return True
 
 
+
 def _verify_legacy(stored: str, raw: str) -> bool:
     """用旧的固定盐 + SHA-256 复算，与存量摘要比对。"""
     calc = hashlib.sha256((_LEGACY_SALT + raw).encode("utf-8")).hexdigest()
     return hmac.compare_digest(stored, calc)
+
 
 
 def verify_pwd(stored: str, raw: str) -> bool:
@@ -55,6 +59,7 @@ def verify_pwd(stored: str, raw: str) -> bool:
     return False
 
 
+
 def needs_rehash(stored: str) -> bool:
     """这个哈希是否需要升级。登录验证通过后调用，True 则重算并写回。"""
     if not stored or not stored.startswith(_PHC_PREFIX):
@@ -63,6 +68,7 @@ def needs_rehash(stored: str) -> bool:
         return _hasher.check_needs_rehash(stored)
     except InvalidHashError:
         return True
+
 
 
 def make_token(user_id: int, username: str, tv: int) -> str:
@@ -74,6 +80,7 @@ def make_token(user_id: int, username: str, tv: int) -> str:
         "exp": datetime.now(timezone.utc) + timedelta(hours=settings.JWT_EXPIRE_HOURS),
     }
     return jwt.encode(payload, settings.JWT_SECRET, algorithm="HS256")
+
 
 
 def parse_token(token: str):

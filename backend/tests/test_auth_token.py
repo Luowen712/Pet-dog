@@ -27,6 +27,7 @@ PASSWORD = "pw-token-7f3a"
 client = TestClient(app)
 
 
+
 def _seed(**kwargs) -> User:
     """建一个用于本文件的账号，多余字段由调用方覆盖。"""
     db = SessionLocal()
@@ -42,6 +43,7 @@ def _seed(**kwargs) -> User:
         db.close()
 
 
+
 def _legacy_token(uid: int, username: str) -> str:
     """签一个不含 tv 的旧式 token —— 模拟改造前签发的票。"""
     return jwt.encode(
@@ -51,11 +53,13 @@ def _legacy_token(uid: int, username: str) -> str:
     )
 
 
+
 def test_missing_header_40100():
     """没带 Authorization 头 → 40100 未登录，而不是 FastAPI 默认的 403。"""
     r = client.get("/api/auth/me")
     assert r.status_code == 401
     assert r.json()["code"] == 40100
+
 
 
 def test_legacy_token_without_tv_rejected():
@@ -72,6 +76,7 @@ def test_legacy_token_without_tv_rejected():
     assert r.json()["code"] == 40101
 
 
+
 def test_token_version_mismatch_rejected():
     """tv 对不上（改过密码 / 注销过）→ 旧票失效。"""
     u = _seed(token_version=5)
@@ -81,6 +86,7 @@ def test_token_version_mismatch_rejected():
     r = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 401
     assert r.json()["code"] == 40101
+
 
 
 def test_inactive_status_rejected():
@@ -93,6 +99,7 @@ def test_inactive_status_rejected():
     assert r.json()["code"] == 40101
 
 
+
 def test_valid_token_accepted():
     """正常票要能通过 —— 上面四条拒绝不能是靠「一律拒绝」蒙对的。"""
     u = _seed()
@@ -103,6 +110,7 @@ def test_valid_token_accepted():
     body = r.json()
     assert body["code"] == 0
     assert body["data"]["username"] == USERNAME
+
 
 
 def test_logout_invalidates_old_token():

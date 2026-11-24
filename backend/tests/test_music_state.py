@@ -7,7 +7,9 @@ from app.models import Device, User
 from app.security import make_token
 
 
+
 def test_disabled_music_cannot_change_device_status():
+    """未启用音乐能力时，相关指令不得改变设备状态。"""
     client = TestClient(app)
     with SessionLocal.begin() as db:
         user = User(username=uuid4().hex, password_hash='unused', role='user', status='active')

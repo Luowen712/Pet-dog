@@ -14,22 +14,30 @@ STATES = {10: 'pending', 20: 'accepted', 30: 'done', 40: 'rejected', 50: 'unknow
 TRANSPORT = {None: None, 0: 'ok', 1: 'write_failed', 2: 'partial_write'}
 
 
+
 def utcnow():
+    """取当前 UTC 时间，去掉时区信息与微秒，统一入库格式。"""
     return datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
 
 
+
 def iso(dt):
+    """把时间转成带时区的 ISO 8601 字符串，None 原样返回。"""
     return dt.replace(tzinfo=timezone.utc).isoformat() if dt else None
 
 
+
 def receipt(row):
+    """把指令日志行转换成给前端的回执结构。"""
     return dict(cmd_id=row.msg_id, device_id=row.device_pk, seq=row.seq, action=row.action,
                 status=STATES[row.status], transport=TRANSPORT[row.transport], reason=row.reason,
                 revision=row.revision, error_code=row.error_code, created_at=iso(row.created_at),
                 updated_at=iso(row.updated_at or row.finished_at or row.created_at), finished_at=iso(row.finished_at))
 
 
+
 def auth_context(db, uid, tv, pk):
+    """校验用户令牌版本与设备归属，返回发送鉴权上下文；用户失效则抛 401。"""
     user = db.get(User, uid)
     if not user or user.status != 'active' or user.token_version != tv:
         raise HTTPException(401, detail={'code': 40101, 'message': '登录已过期'})
@@ -37,7 +45,9 @@ def auth_context(db, uid, tv, pk):
     return AuthContext(uid, tv, pk, d.be) if d else None
 
 
+
 def invalid_code(ctx):
+    """复核长连接鉴权是否仍有效，失效返回 4401 或 1008，正常返回 None。"""
     with SessionLocal() as db:
         try:
             return None if auth_context(db, ctx.uid, ctx.tv, ctx.device_pk) == ctx else 1008
@@ -48,7 +58,10 @@ def invalid_code(ctx):
 class ReceiptWriter:
     """Serialize callbacks off the event loop; DB commit precedes publication."""
 
+
+
     def __init__(self, events):
+        """建单线程执行器，把回执落库串行化到独立线程，避免阻塞事件循环。"""
         self.events = events
         self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='command-db')
         self._mu = threading.Lock()
@@ -60,7 +73,10 @@ class ReceiptWriter:
             if stage > self._latest_stage.get(k, 0):
                 self._latest_stage[k] = stage
 
+
+
     def on_event(self, session, event):
+        """会话事件入口：指令类事件排队落库，状态与链路类事件直接广播。"""
         data = event.payload.copy()
         if event.kind in ('accepted', 'done', 'rejected', 'unknown'):
             if event.kind == 'accepted':
@@ -80,19 +96,28 @@ class ReceiptWriter:
                 data['updated_at'] = iso(utcnow())
             self.events.publish(snap.device_pk, snap.be, event.kind, data)
 
+
+
     def publish_link(self, session, sid, be, reason=None):
+        """广播设备链路状态，仅当会话与绑定纪元未被切换时才推送。"""
         snap = session.snapshot()
         if (snap.session_id, snap.be) == (sid, be):
             self.events.publish(snap.device_pk, be, 'link', dict(device_id=snap.device_pk,
                                 session_id=sid, state_revision=snap.state_revision, online=snap.online,
                                 control_state=snap.control_state, reason=reason))
 
+
+
     def on_write(self, session, sid, cmd_id, uid, outcome):
+        """传输层写入结果回调，把结果排队落库。"""
         if outcome.transport == 0:
             self._bump_stage(sid, cmd_id, 1)
         self.pool.submit(self._update, session, sid, dict(cmd_id=cmd_id, actor_user_id=uid), 'write', outcome)
 
+
+
     def _update(self, session, sid, data, kind, outcome):
+        """落库一条指令的状态迁移：加行锁改状态、递增 revision，然后广播回执。"""
         k = (sid, data['cmd_id'])
         with self._mu:
             latest = self._latest_stage.get(k, 0)

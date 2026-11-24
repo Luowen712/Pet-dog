@@ -9,11 +9,15 @@ branch_labels = None
 depends_on = None
 
 
+
 def upgrade() -> None:
+    """删除已废弃的配对码表 device_claim。"""
     op.drop_table("device_claim")
 
 
+
 def downgrade() -> None:
+    """回滚 0011：按原结构重建 device_claim 表。"""
     op.create_table(
         "device_claim",
         sa.Column("id", sa.Integer(), nullable=False),

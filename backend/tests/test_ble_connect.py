@@ -25,18 +25,29 @@ from app.security import make_token
 
 
 class _FakeChar:
+
+
+
     def __init__(self, uuid_str: str, properties: list[str]):
+        """记录特征 UUID 与属性列表。"""
         self.uuid = uuid_str
         self.properties = properties
 
 
 class _FakeService:
+
+
+
     def __init__(self, uuid_str: str, chars: list[_FakeChar]):
+        """记录服务 UUID 与特征列表。"""
         self.uuid = uuid_str
         self.characteristics = chars
 
 
 class _FakeBleakClient:
+
+
+
     def __init__(
         self,
         address: str,
@@ -46,6 +57,7 @@ class _FakeBleakClient:
         services=None,
         fail_on_write_call: int | None = None,
     ):
+        """记录地址、断线回调与默认服务，模拟未连接状态。"""
         self.address = address
         self._disc_cb = disconnected_callback
         self.services = services or [
@@ -62,35 +74,58 @@ class _FakeBleakClient:
         self.written: list[tuple[str, bytes, bool]] = []
         self._fail_on_write_call = fail_on_write_call
 
+
+
     async def connect(self):
+        """模拟建连：直接标记已连接。"""
         self.is_connected = True
 
+
+
     async def start_notify(self, uuid_str: str, cb):
+        """记录通知回调，模拟订阅成功。"""
         self.notify_cb = cb
 
+
+
     async def stop_notify(self, uuid_str: str):
+        """清掉通知回调，模拟取消订阅。"""
         self.notify_cb = None
 
+
+
     async def write_gatt_char(self, uuid_str: str, data: bytes, response: bool = False):
+        """记录写入内容；按需在第 N 次调用抛错以模拟写失败。"""
         idx = len(self.written) + 1
         if self._fail_on_write_call == idx:
             raise OSError("gatt write error")
         self.written.append((uuid_str, bytes(data), response))
 
+
+
     async def disconnect(self):
+        """模拟断开连接。"""
         self.is_connected = False
 
+
+
     def push_notify(self, data: bytes):
+        """模拟外设推送通知数据给回调。"""
         assert self.notify_cb is not None
         self.notify_cb(None, bytearray(data))
 
+
+
     def trigger_disconnect(self):
+        """模拟意外断线并触发断线回调。"""
         self.is_connected = False
         if self._disc_cb is not None:
             self._disc_cb(self)
 
 
+
 def _mk_user(db, prefix: str = "ble") -> tuple[User, dict]:
+    """造一个启用账号并签发令牌头，返回用户与请求头。"""
     u = User(
         username=f"{prefix}_{uuid.uuid4().hex[:10]}",
         password_hash="x" * 64,
@@ -103,7 +138,9 @@ def _mk_user(db, prefix: str = "ble") -> tuple[User, dict]:
     return u, {"Authorization": "Bearer " + make_token(u.id, u.username, 0)}
 
 
+
 def test_resolve_gatt_chars_supports_fff0_and_ffe0_fallback():
+    """透传特征解析同时支持 fff0 与 ffe0 两套 UUID。"""
     fff_services = [
         _FakeService(
             "0000fff0-0000-1000-8000-00805f9b34fb",
@@ -130,10 +167,13 @@ def test_resolve_gatt_chars_supports_fff0_and_ffe0_fallback():
     assert use_resp2 is True
 
 
+
 def test_ble_byte_port_chunks_writes_buffers_notify_and_tracks_partial_write():
+    """端口按 MTU 切片写入、缓存通知数据，并正确上报部分写。"""
     holder: dict[str, _FakeBleakClient] = {}
 
     def make_client(addr, **kw):
+        """构造假客户端并保留引用，便于后续断言。"""
         c = _FakeBleakClient(addr, **kw)
         holder["c"] = c
         return c
@@ -183,10 +223,13 @@ def test_ble_byte_port_chunks_writes_buffers_notify_and_tracks_partial_write():
         p_second.close()
 
 
+
 def test_scan_ble_devices_prioritizes_ecb02_and_rssi():
+    """扫描结果优先 EC B02 设备，其次按信号强度排序。"""
     import asyncio
 
     async def fake_discover(**_kw):
+        """伪造扫描结果：一台普通音箱与一台 EC B02。"""
         return {
             "other": (
                 SimpleNamespace(address="11:22:33:44:55:01", name="RandomSpeaker"),
@@ -202,7 +245,9 @@ def test_scan_ble_devices_prioritizes_ecb02_and_rssi():
     assert [d.address for d in found] == ["11:22:33:44:55:02", "11:22:33:44:55:01"]
 
 
+
 def test_ble_scan_direct_connect_bind_and_account_isolation(monkeypatch, tmp_path):
+    """蓝牙扫描到直连绑定的全流程，且两个账号互相看不到对方设备。"""
     with SessionLocal() as db:
         u1, h1 = _mk_user(db, "ble_u1")
         u2, h2 = _mk_user(db, "ble_u2")
@@ -287,7 +332,9 @@ def test_ble_scan_direct_connect_bind_and_account_isolation(monkeypatch, tmp_pat
             assert u1_id != u2_id
 
 
+
 def test_ble_mode_health_and_failed_connect_does_not_dirty_db(monkeypatch, tmp_path):
+    """纯蓝牙模式下健康检查正确，连接失败不会写脏数据库。"""
     with SessionLocal() as db:
         _, h = _mk_user(db, "ble_fail")
 
@@ -313,7 +360,9 @@ def test_ble_mode_health_and_failed_connect_does_not_dirty_db(monkeypatch, tmp_p
         assert db.query(Device).filter_by(device_id=bad_addr).first() is None
 
 
+
 def test_account_delete_disconnects_active_ble_port(monkeypatch, tmp_path):
+    """注销账号时主动断开其占用的蓝牙连接。"""
     from app.security import hash_pwd
 
     pw = "ble-delete-pw-1234"
@@ -327,6 +376,7 @@ def test_account_delete_disconnects_active_ble_port(monkeypatch, tmp_path):
     created_ports: list[BleBytePort] = []
 
     def make_ble_port(addr: str) -> BleBytePort:
+        """构造可被追踪的假蓝牙端口。"""
         p = BleBytePort(addr, client_factory=lambda a, **kw: _FakeBleakClient(a, **kw))
         created_ports.append(p)
         return p
@@ -356,7 +406,9 @@ def test_account_delete_disconnects_active_ble_port(monkeypatch, tmp_path):
         assert created_ports[0].is_open is False
 
 
+
 def test_offline_ble_reconnect_closes_old_port_before_reopening(monkeypatch, tmp_path):
+    """离线重连前必须先释放旧端口，否则单连接外设会拒连。"""
     with SessionLocal() as db:
         _, h = _mk_user(db, "ble_reconn")
 
@@ -364,6 +416,7 @@ def test_offline_ble_reconnect_closes_old_port_before_reopening(monkeypatch, tmp
     old_open_when_reopening: list[bool] = []
 
     def make_ble_port(addr: str) -> BleBytePort:
+        """构造端口并记录重连时旧端口是否已释放。"""
         if created_ports:
             # 单连接外设 ECB02H2 重连前必须先释放旧句柄
             old_open_when_reopening.append(created_ports[-1].is_open)
@@ -397,7 +450,9 @@ def test_offline_ble_reconnect_closes_old_port_before_reopening(monkeypatch, tmp
         assert app.state.device_session is not first_session
 
 
+
 def test_ble_connect_rejects_hijacking_other_users_active_session_and_closes_on_bind_error(monkeypatch, tmp_path):
+    """他人会话占用时拒绝抢连，绑定失败时关掉临时端口。"""
     from app.services import ble as ble_service
 
     with SessionLocal() as db:
@@ -407,6 +462,7 @@ def test_ble_connect_rejects_hijacking_other_users_active_session_and_closes_on_
     created_ports: list[BleBytePort] = []
 
     def make_ble_port(addr: str) -> BleBytePort:
+        """构造可追踪的假蓝牙端口，供抢连用例断言。"""
         p = BleBytePort(addr, client_factory=lambda a, **kw: _FakeBleakClient(a, **kw))
         created_ports.append(p)
         return p

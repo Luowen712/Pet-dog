@@ -40,6 +40,7 @@ PASSWORD = "guard-pw-4d21"
 client = TestClient(app)
 
 
+
 def _reset_admins():
     """清空测试库的管理员，保证「几个 admin」由本用例自己决定。"""
     db = SessionLocal()
@@ -50,7 +51,9 @@ def _reset_admins():
         db.close()
 
 
+
 def _mk_admin(username: str, status: str = "active") -> User:
+    """造一个指定状态的 admin 账号并返回。"""
     db = SessionLocal()
     try:
         u = User(
@@ -69,7 +72,9 @@ def _mk_admin(username: str, status: str = "active") -> User:
         db.close()
 
 
+
 def _delete(u: User) -> dict:
+    """带令牌调用注销接口，返回状态码与响应体。"""
     token = make_token(u.id, u.username, u.token_version)
     r = client.request(
         "DELETE",
@@ -78,6 +83,7 @@ def _delete(u: User) -> dict:
         headers={"Authorization": f"Bearer {token}"},
     )
     return {"http": r.status_code, "body": r.json()}
+
 
 
 def test_sole_admin_cannot_delete_account():
@@ -98,6 +104,7 @@ def test_sole_admin_cannot_delete_account():
         db.close()
 
 
+
 def test_admin_can_delete_when_another_admin_exists():
     """还有别的 active admin 时，注销应当放行 —— 上面那条不能是靠「一律拒绝」蒙对的。"""
     _reset_admins()
@@ -113,6 +120,7 @@ def test_admin_can_delete_when_another_admin_exists():
         assert gone.status == "revoking"
     finally:
         db.close()
+
 
 
 def test_disabled_admin_does_not_count_as_backup():

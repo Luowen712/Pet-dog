@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from app.models import Device, Telemetry
 
 
+
 def get_owned_device(
     db: Session, uid: int, device_pk: int, *, for_update: bool = False
 ) -> Device | None:
@@ -29,6 +30,7 @@ def get_owned_device(
     if for_update:
         q = q.with_for_update()
     return q.first()
+
 
 
 def latest_telemetry(db: Session, d: Device) -> Telemetry | None:
@@ -44,6 +46,7 @@ def latest_telemetry(db: Session, d: Device) -> Telemetry | None:
         .order_by(Telemetry.id.desc())
         .first()
     )
+
 
 
 def latest_telemetry_map(db: Session, devices: list[Device]) -> dict[int, Telemetry]:
@@ -68,6 +71,7 @@ def latest_telemetry_map(db: Session, devices: list[Device]) -> dict[int, Teleme
     # 第二步：拿这些 id 回表取整行
     rows = db.query(Telemetry).join(sub, Telemetry.id == sub.c.tid).all()
     return {t.device_pk: t for t in rows}
+
 
 
 def battery_of(t: Telemetry | None) -> int | None:

@@ -61,6 +61,7 @@ from app.main import app
 from app.models import CommandLog, Device, DeviceSessionRecord
 
 
+
 def _mk_device(
     db,
     prefix: str = "BA02",
@@ -68,6 +69,7 @@ def _mk_device(
     handover_state: str = "ready",
     be: int = 0,
 ) -> Device:
+    """造一台测试设备，可指定交接状态与绑定纪元。"""
     d = Device(
         device_id=f"{prefix}-{uuid.uuid4().hex[:8]}",
         name="BA02测试宠",
@@ -81,7 +83,9 @@ def _mk_device(
     return d
 
 
+
 def _wait_until(pred, timeout: float = 2.0) -> bool:
+    """轮询等待条件成立，超时返回 False。"""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if pred():
@@ -93,7 +97,10 @@ def _wait_until(pred, timeout: float = 2.0) -> bool:
 class _RecordingPort:
     """记录所有写出帧并可手动注入接收帧的轻量内存端口。"""
 
+
+
     def __init__(self) -> None:
+        """初始化写出记录、接收缓冲区与写入门闸。"""
         self.written: list[bytes] = []
         self._rx = bytearray()
         self._mu = threading.Lock()
@@ -101,15 +108,24 @@ class _RecordingPort:
         self.write_gate = threading.Event()
         self.write_gate.set()
 
+
+
     @property
     def is_open(self) -> bool:
+        """端口是否尚未关闭。"""
         return not self._closed
 
+
+
     def inject_rx(self, data: bytes) -> None:
+        """向端口注入待读数据，模拟设备上行。"""
         with self._mu:
             self._rx += data
 
+
+
     def read(self, size: int = 1) -> bytes:
+        """读出指定长度的数据，端口关闭时报错。"""
         with self._mu:
             if self._closed:
                 raise OSError("port closed")
@@ -117,7 +133,10 @@ class _RecordingPort:
             del self._rx[:size]
             return chunk
 
+
+
     def write(self, data: bytes) -> int:
+        """写入数据并记录；先等写入门闸，便于卡住写过程做断言。"""
         self.write_gate.wait(timeout=2.0)
         with self._mu:
             if self._closed:
@@ -125,10 +144,16 @@ class _RecordingPort:
             self.written.append(bytes(data))
             return len(data)
 
+
+
     def flush(self) -> None:
+        """空实现，保持端口接口一致。"""
         pass
 
+
+
     def close(self) -> None:
+        """标记端口已关闭，后续读写报错。"""
         with self._mu:
             self._closed = True
 
@@ -136,7 +161,9 @@ class _RecordingPort:
 # --- 1. 判据一：lifespan 取得主机锁 + DB 实例锁，重复启动被拒 ---
 
 
+
 def test_lifespan_acquires_both_locks_and_rejects_duplicate(tmp_path):
+    """启动时同时取主机锁与实例锁，重复启动必须被拒绝。"""
     lock_file = tmp_path / "petdog-test.lock"
     db_lock_name = "petdog:test:life:" + uuid.uuid4().hex[:8]
 
@@ -172,6 +199,7 @@ def test_lifespan_acquires_both_locks_and_rejects_duplicate(tmp_path):
                 delattr(app.state, attr)
 
 
+
 def test_lifespan_rolls_back_host_lock_when_db_lock_busy(tmp_path):
     """DB 实例锁被占用时拒绝启动，且必须回滚释放刚拿到的主机锁。"""
     lock_file = tmp_path / "petdog-rollback.lock"
@@ -199,7 +227,9 @@ def test_lifespan_rolls_back_host_lock_when_db_lock_busy(tmp_path):
 # --- 2. BA02 第 2 条：SendGate 最小实现与撤销协调接口 ---
 
 
+
 def test_send_gate_commits_inside_lock_and_notifies_outside_lock():
+    """提交在锁内完成，撤销通知在释锁之后才发出。"""
     gate = SendGate(default_timeout=1.0)
     seen: list[RevokeEvent] = []
     ctx = AuthContext(uid=7, tv=2, device_pk=1, be=3)
@@ -207,6 +237,7 @@ def test_send_gate_commits_inside_lock_and_notifies_outside_lock():
 
     def on_revoke(ev: RevokeEvent) -> None:
         # 监听器必须在释锁之后被调用：此时再次获取 gate.hold 绝不能死锁
+        """监听器里再次取锁，验证通知发生在释锁之后。"""
         with gate.hold(timeout=0.5):
             seen.append(ev)
 
@@ -214,6 +245,7 @@ def test_send_gate_commits_inside_lock_and_notifies_outside_lock():
     try:
         def commit() -> str:
             # commit 期间锁必须正被持有（其他线程拿不到）
+            """断言提交期间锁仍被持有，然后返回提交结果。"""
             assert gate._lock.locked() is True
             return "committed"
 
@@ -229,11 +261,14 @@ def test_send_gate_commits_inside_lock_and_notifies_outside_lock():
         unregister()
 
 
+
 def test_send_gate_skips_listeners_when_commit_fails():
+    """提交抛异常时不触发撤销监听器。"""
     gate = SendGate(default_timeout=1.0)
     called = False
 
     def on_revoke(_ev: RevokeEvent) -> None:
+        """记录监听器是否被调用。"""
         nonlocal called
         called = True
 
@@ -251,7 +286,9 @@ def test_send_gate_skips_listeners_when_commit_fails():
 # --- 3. 写队列 32 上限、心跳合并优先不饿死、排队超 1 秒过期（N30） ---
 
 
+
 def test_queue_limit_heartbeat_priority_and_expiry():
+    """写队列有上限、心跳优先，排队过久的写判为过期。"""
     clock = FakeClock()
     port = _RecordingPort()
     link = SerialLink(
@@ -308,8 +345,11 @@ def test_queue_limit_heartbeat_priority_and_expiry():
 # --- 4. 判据四：串口线程通过 loop.call_soon_threadsafe 投递，不直接改 Future ---
 
 
+
 def test_callbacks_run_on_event_loop_thread_not_io_thread():
+    """收帧回调必须跑在事件循环线程，而不是 I/O 线程。"""
     async def _scenario() -> None:
+        """在事件循环里投喂帧，并记录回调所在线程。"""
         loop = asyncio.get_running_loop()
         loop_tid = threading.get_ident()
         callback_tids: list[int] = []
@@ -320,6 +360,7 @@ def test_callbacks_run_on_event_loop_thread_not_io_thread():
         port = SimBytePort(sim_dev)
 
         def on_frame(frame: Frame, _received_at: float) -> None:
+            """记录回调线程并唤醒等待方。"""
             callback_tids.append(threading.get_ident())
             received.append(frame)
             got.set()
@@ -348,7 +389,9 @@ def test_callbacks_run_on_event_loop_thread_not_io_thread():
 # --- 5. 判据五 & BA02 第 3 条：重启不重发旧动作 + 默认 recovery_required + 新快照才 ready ---
 
 
+
 def test_restart_marks_unfinished_unknown_and_requires_prepared_plus_snapshot():
+    """重启后未终结命令改 unknown，且要准备标记加首帧快照才能就绪。"""
     db = SessionLocal()
     try:
         d = _mk_device(db, "RESTART")
@@ -452,7 +495,9 @@ def test_restart_marks_unfinished_unknown_and_requires_prepared_plus_snapshot():
 # --- 6. 判据二 & 第 4 条：pending/seq 先于 write；第 256 条拒收且零 write（N09） ---
 
 
+
 def test_seq_and_pending_before_write_and_256th_rejected():
+    """序号先落库再入队，第 256 条直接拒绝且不写出。"""
     db = SessionLocal()
     try:
         d = _mk_device(db, "SEQ255")
@@ -482,6 +527,7 @@ def test_seq_and_pending_before_write_and_256th_rejected():
 
         def _verify_before_write() -> bool:
             # 此时尚未调用 port.write()：DB last_seq 与 pending 必须已经先登记
+            """写前回调：回查库里该序号是否已持久化。"""
             check_db = SessionLocal()
             try:
                 rec = (
@@ -521,12 +567,16 @@ def test_seq_and_pending_before_write_and_256th_rejected():
 # --- 7. 判据三：DB 锁丢失停止发送、进入 faulted 并关口（N07） ---
 
 
+
 def test_db_lock_loss_halts_writes_and_faults_session():
+    """数据库实例锁丢失后停止发送并进入故障态。"""
     class _SwitchableLock:
         def __init__(self) -> None:
+            """初始化可切换的假锁状态。"""
             self.alive = True
 
         def still_held(self) -> bool:
+            """返回当前假锁是否仍被持有。"""
             return self.alive
 
     db = SessionLocal()
@@ -580,7 +630,9 @@ def test_db_lock_loss_halts_writes_and_faults_session():
 # --- 8. 迟到旧帧记 orphan（N10）与 0x84 不回显循环（N17） ---
 
 
+
 def test_late_frames_recorded_as_orphan_and_heartbeat_ack_no_echo():
+    """迟到帧记为孤儿帧，心跳确认绝不回发。"""
     db = SessionLocal()
     try:
         d = _mk_device(db, "ORPHAN")
@@ -621,7 +673,9 @@ def test_late_frames_recorded_as_orphan_and_heartbeat_ack_no_echo():
 # --- 9. 优雅关闭先拒新操作并关闭会话记录 + loop:// 烟测 ---
 
 
+
 def test_graceful_close_and_loop_url_smoke():
+    """优雅关闭可用，loop:// 链路能正常收发。"""
     db = SessionLocal()
     try:
         d = _mk_device(db, "CLOSE")
@@ -678,7 +732,9 @@ def test_graceful_close_and_loop_url_smoke():
 # --- 10. 代码审查补测：确定未写自动释放运动槽 + SendGate 撤销清空设备缓存 ---
 
 
+
 def test_aborted_write_releases_pending_slot_and_revoke_clears_cache():
+    """写前中止会释放运动槽，撤销后状态缓存被清空。"""
     db = SessionLocal()
     try:
         d = _mk_device(db, "GATECACHE")
@@ -737,7 +793,9 @@ def test_aborted_write_releases_pending_slot_and_revoke_clears_cache():
 # --- 11. P1 验收：lifespan 自动装配 DeviceSession、绑 loop/锁/SendGate 并跑后台心跳 ---
 
 
+
 def test_lifespan_assembles_device_session_and_runs_heartbeat_ticker(tmp_path):
+    """启动能装配出设备会话，并跑起心跳定时任务。"""
     db = SessionLocal()
     try:
         d = _mk_device(db, "LIFE_SESS")
@@ -800,7 +858,9 @@ def test_lifespan_assembles_device_session_and_runs_heartbeat_ticker(tmp_path):
 # --- 12. P2 验收：上行超时恢复与 claim 均轮换 session_id 并归零 seq ---
 
 
+
 def test_timeout_recovery_and_claim_rotate_session_and_reset_seq():
+    """上行超时恢复与设备认领都会轮换会话并重置序号。"""
     db = SessionLocal()
     try:
         d = _mk_device(db, "ROTATE")
@@ -891,7 +951,9 @@ def test_timeout_recovery_and_claim_rotate_session_and_reset_seq():
 # --- 12b. 复审项 A1：超时轮换后旧会话遥测不得贴上新 session_id（06:302）---
 
 
+
 def test_timeout_rotation_clears_cached_status_for_new_session():
+    """超时轮换后旧会话的状态缓存不会带到新会话。"""
     db = SessionLocal()
     try:
         d = _mk_device(db, "ROT_CACHE")
@@ -948,7 +1010,9 @@ def test_timeout_rotation_clears_cached_status_for_new_session():
 # --- 12c. 复审项 A2：只有设备已上报空闲才解除 recovery_required（06:358）---
 
 
+
 def test_recovery_required_clears_only_after_idle_status_on_valid_session():
+    """只有有效会话上报空闲状态后才解除恢复态。"""
     db = SessionLocal()
     try:
         d = _mk_device(db, "REC_EXIT")
@@ -1004,7 +1068,9 @@ def test_recovery_required_clears_only_after_idle_status_on_valid_session():
 # --- 13. P3 验收：DeviceSession 透传 asyncio loop，on_event 在事件循环线程跑 ---
 
 
+
 def test_device_session_dispatches_events_on_event_loop_thread():
+    """设备会话的事件统一投递到事件循环线程。"""
     db = SessionLocal()
     try:
         d = _mk_device(db, "LOOPPASS")
@@ -1013,12 +1079,14 @@ def test_device_session_dispatches_events_on_event_loop_thread():
         db.close()
 
     async def _run() -> None:
+        """在事件循环里触发状态帧，并记录回调线程。"""
         loop = asyncio.get_running_loop()
         loop_tid = threading.get_ident()
         seen_tids: list[int] = []
         done = asyncio.Event()
 
         def on_event(ev: SessionEvent) -> None:
+            """记录状态事件的回调线程并唤醒等待方。"""
             if ev.kind == "state":
                 seen_tids.append(threading.get_ident())
                 done.set()
@@ -1048,6 +1116,7 @@ def test_device_session_dispatches_events_on_event_loop_thread():
 # --- 13b. 复审项 A：超时事件（工作线程触发）也必须切回事件循环线程 ---
 
 
+
 def test_uplink_timeout_event_dispatched_on_event_loop_thread():
     """check_uplink_timeout 由 asyncio.to_thread 调用，事件仍须落在事件循环线程（06:185）。"""
     db = SessionLocal()
@@ -1058,6 +1127,7 @@ def test_uplink_timeout_event_dispatched_on_event_loop_thread():
         db.close()
 
     async def _run() -> None:
+        """在事件循环里推进时钟触发上行超时，记录回调线程。"""
         loop = asyncio.get_running_loop()
         loop_tid = threading.get_ident()
         clock = FakeClock()
@@ -1065,6 +1135,7 @@ def test_uplink_timeout_event_dispatched_on_event_loop_thread():
         done = asyncio.Event()
 
         def on_event(ev: SessionEvent) -> None:
+            """记录超时链路事件的回调线程并唤醒等待方。"""
             if ev.kind == "link" and ev.payload.get("reason") == "uplink_timeout":
                 seen.append((str(ev.payload.get("reason")), threading.get_ident()))
                 done.set()
@@ -1103,7 +1174,9 @@ def test_uplink_timeout_event_dispatched_on_event_loop_thread():
 # --- 14. P4 验收：SendGate 被占用等待期间，SerialLink 仍持续读串口不阻塞 ---
 
 
+
 def test_serial_link_keeps_reading_while_waiting_on_send_gate():
+    """等待 SendGate 期间链路仍在持续收帧。"""
     gate = SendGate(default_timeout=1.0)
     port = _RecordingPort()
     received: list[Frame] = []
@@ -1134,7 +1207,9 @@ def test_serial_link_keeps_reading_while_waiting_on_send_gate():
 # --- 15. P5 / P6 / 轻微项验收：未知 action=0xFF、畸形帧不抹缓存、优先级、naive 时区 ---
 
 
+
 def test_unknown_action_malformed_status_cache_and_control_state_order():
+    """异常状态帧不清缓存，control_state 的优先级符合契约。"""
     db = SessionLocal()
     try:
         d = _mk_device(db, "STATUS_EDGE")
@@ -1186,7 +1261,9 @@ def test_unknown_action_malformed_status_cache_and_control_state_order():
 # --- 16. 复审项 ③：DB 一次性准备标记（state='prepared'）启动消费且不可复用 ---
 
 
+
 def test_db_prepared_marker_consumed_once_on_startup():
+    """库里的准备标记只被消费一次，重启后不再生效。"""
     db = SessionLocal()
     try:
         d = _mk_device(db, "DBPREP")
@@ -1241,7 +1318,9 @@ def test_db_prepared_marker_consumed_once_on_startup():
 # --- 17. 复审项 ④：轮换写库不占事件循环线程 + 后台 ticker 异常不静默死亡 ---
 
 
+
 def test_timeout_rotation_db_write_off_event_loop_and_ticker_survives_error():
+    """超时轮换的写库不占用事件循环，后台任务遇异常仍继续。"""
     from app.main import _session_maintenance_loop
 
     db = SessionLocal()
@@ -1252,6 +1331,7 @@ def test_timeout_rotation_db_write_off_event_loop_and_ticker_survives_error():
         db.close()
 
     async def _run() -> None:
+        """在事件循环里驱动会话轮换，并校验写库发生的线程。"""
         loop = asyncio.get_running_loop()
         loop_tid = threading.get_ident()
         open_tids: list[int] = []
@@ -1272,6 +1352,7 @@ def test_timeout_rotation_db_write_off_event_loop_and_ticker_survives_error():
         orig_open = sess._open_session_record
 
         def _spy_open(be: int, sid: str):
+            """记录新会话记录落库时所在线程，再调用原实现。"""
             open_tids.append(threading.get_ident())
             res = orig_open(be, sid)
             loop.call_soon_threadsafe(done.set)
@@ -1302,23 +1383,28 @@ def test_timeout_rotation_db_write_off_event_loop_and_ticker_survives_error():
             online = True
 
             def __init__(self) -> None:
+                """初始化心跳与超时检查的调用计数。"""
                 self.hb_calls = 0
                 self.check_calls = 0
 
             @property
             def control_state(self) -> str:
+                """假会话固定报 ready。"""
                 return "ready"
 
             def send_heartbeat(self) -> bool:
+                """首次抛异常模拟抖动，之后正常返回。"""
                 self.hb_calls += 1
                 if self.hb_calls == 1:
                     raise RuntimeError("transient error")
                 return True
 
             def check_command_timeout(self) -> None:
+                """空实现，保持接口一致。"""
                 pass
 
             def check_uplink_timeout(self) -> bool:
+                """首次抛异常模拟数据库抖动，之后返回 False。"""
                 self.check_calls += 1
                 if self.check_calls == 1:
                     raise RuntimeError("transient db error")
@@ -1348,8 +1434,10 @@ def test_timeout_rotation_db_write_off_event_loop_and_ticker_survives_error():
 # --- 18. 深度复审补测：SendGate 等待期间失锁拦写 + send_motion 写库间隙解绑拦写 ---
 
 
+
 def test_lock_drop_during_send_gate_wait_and_unbind_during_seq_persist():
     # A. SendGate 被占用等待期间 DB 锁断开 → 必须立刻判 db_lock_lost 且 0 字节写出
+    """等锁期间失锁要停发；持久化序号期间被解绑要中止发送。"""
     gate = SendGate(default_timeout=1.0)
     port = _RecordingPort()
     lock_alive = True
@@ -1402,6 +1490,7 @@ def test_lock_drop_during_send_gate_wait_and_unbind_during_seq_persist():
         orig_persist = sess._persist_last_seq
 
         def _persist_then_unbind(rec_id, seq):
+            """持久化序号后立刻触发解绑撤销，制造竞争窗口。"""
             orig_persist(rec_id, seq)
             # 在阶段 2 刚落库、阶段 3 尚未拿锁前，模拟设备被解绑
             gate2.revoke_access(

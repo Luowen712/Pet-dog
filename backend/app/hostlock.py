@@ -33,9 +33,13 @@ assert len(ADMIN_LOCK_NAME) <= 64, "命名锁超过 MySQL 的 64 字符上限"
 class HostLockError(RuntimeError):
     """拿不到锁或环境不支持。CLI 应据此退出，且不做任何写操作。"""
 
+
+
     def __init__(self, message: str, exit_code: int = 3):
+        """记录退出码，供 CLI 拿到锁失败时直接退出使用。"""
         super().__init__(message)
         self.exit_code = exit_code
+
 
 
 def _assert_single_writer(conn) -> None:
@@ -73,6 +77,7 @@ def _assert_single_writer(conn) -> None:
             "本节点生效，等于没有锁" % grp[1],
             exit_code=4,
         )
+
 
 
 @contextmanager

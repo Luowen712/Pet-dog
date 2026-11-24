@@ -75,6 +75,7 @@ I1_EXPR = (
 )
 
 
+
 def upgrade() -> None:
     """把归属四约束 + device_pk 外键/NOT NULL 落成真实 DDL。"""
 
@@ -139,6 +140,7 @@ def upgrade() -> None:
     op.create_unique_constraint(
         "uq_device_claim_device", "device_claim", ["device_pk"]
     )
+
 
 
 def downgrade() -> None:

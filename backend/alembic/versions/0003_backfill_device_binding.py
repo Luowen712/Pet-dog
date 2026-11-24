@@ -59,10 +59,12 @@ UPDATE device
 """
 
 
+
 def upgrade() -> None:
     """按 owner_id 回填存量设备的绑定状态。"""
     op.execute(BOUND_SQL)
     op.execute(UNBOUND_SQL)
+
 
 
 def downgrade() -> None:

@@ -10,14 +10,17 @@ FIXTURES = (
 )
 
 
+
 def hx(text: str) -> bytes:
     """把 "AA 55 04 01" 这种带空格的十六进制串变成字节。"""
     return bytes.fromhex(text.replace(" ", ""))
 
 
+
 def test_build_stand_matches_official_vector():
     """06:282 官方向量：请求站立 seq=1。"""
     assert build(0x01, b"\x31\x00\x01\x01") == hx("AA 55 04 01 31 00 01 01 C7")
+
 
 
 def test_build_face_frames():
@@ -31,16 +34,19 @@ def test_build_face_frames():
     assert build(0x07, b"\x01") == hx("AA 55 01 07 01 F6")
 
 
+
 def test_seven_actions_sum_is_arithmetic():
     """七动作 SUM 等差 C8→C2，差一错一眼就看出来。"""
     sums = [build(0x01, bytes([code, 0, 1, 1]))[-1] for code in range(0x30, 0x37)]
     assert sums == list(range(0xC8, 0xC1, -1))
 
 
+
 def test_build_rejects_oversize():
     """LEN=32 必须抛异常，不是发出后让固件拒绝。"""
     with pytest.raises(ValueError):
         build(0x03, bytes(32))
+
 
 
 def test_parse_all_fixtures():
@@ -59,6 +65,7 @@ def test_parse_all_fixtures():
     assert count == 11
 
 
+
 def test_parse_bounds_fixture():
     """边界用例：合法的一帧，非法的零帧。"""
     fixture = json.loads(
@@ -72,6 +79,7 @@ def test_parse_bounds_fixture():
             assert frames == [], case["name"]
 
 
+
 def test_parse_byte_by_byte():
     """逐字节喂：前 8 次都不许产出，第 9 次出 1 帧。"""
     parser = Parser()
@@ -83,11 +91,13 @@ def test_parse_byte_by_byte():
     assert frames[0].data == b"\x31\x00\x01\x01"
 
 
+
 def test_parse_two_frames_in_one_chunk():
     """粘包：一次喂两帧，必须产出两帧。"""
     raw = hx("AA 55 00 04 FB") + hx("AA 55 00 04 FB")
     frames = Parser().feed(raw)
     assert [f.cmd for f in frames] == [0x04, 0x04]
+
 
 
 def test_parse_bad_sum_then_good():
@@ -98,6 +108,7 @@ def test_parse_bad_sum_then_good():
     assert len(frames) == 1
     assert frames[0].cmd == 0x01
     assert parser.bad_sum == 1
+
 
 
 def test_parse_garbage_is_silent():

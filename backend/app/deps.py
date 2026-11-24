@@ -10,6 +10,7 @@ from app.security import parse_token
 bearer_scheme = HTTPBearer(auto_error=False, scheme_name="Bearer Token")
 
 
+
 def current_user(
     cred: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     db: Session = Depends(get_db),

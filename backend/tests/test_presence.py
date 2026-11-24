@@ -3,9 +3,11 @@ from datetime import datetime, timedelta
 from app.services.presence import is_online
 
 
+
 def test_never_seen_is_offline():
     """从没上报过心跳的设备，last_seen 是 None，必须算离线。"""
     assert is_online(None) is False
+
 
 
 def test_just_heartbeat_is_online():
@@ -14,16 +16,19 @@ def test_just_heartbeat_is_online():
     assert is_online(now, at=now) is True
 
 
+
 def test_31s_ago_is_offline():
     """超过 30 秒 TTL，算离线。"""
     now = datetime.now()
     assert is_online(now - timedelta(seconds=31), at=now) is False
 
 
+
 def test_exactly_30s_ago_is_still_online():
     """边界：正好 30 秒，源码用的是 <=，所以还在线。"""
     now = datetime.now()
     assert is_online(now - timedelta(seconds=30), at=now) is True
+
 
 
 def test_future_timestamp_counts_as_offline():

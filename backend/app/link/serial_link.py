@@ -59,20 +59,44 @@ class LinkClosedError(LinkError):
 class BytePort(Protocol):
     """与 pyserial.Serial 和 SimBytePort 同形的最小端口协议。"""
 
+
+
     @property
-    def is_open(self) -> bool: ...
+    def is_open(self) -> bool:
+        """端口协议：端口是否已打开。"""
+        ...
 
-    def read(self, size: int = 1) -> bytes: ...
 
-    def write(self, data: bytes) -> int | None: ...
 
-    def flush(self) -> None: ...
+    def read(self, size: int = 1) -> bytes:
+        """端口协议：读取指定长度的字节。"""
+        ...
 
-    def close(self) -> None: ...
+
+
+    def write(self, data: bytes) -> int | None:
+        """端口协议：写入字节并返回实际写入长度。"""
+        ...
+
+
+
+    def flush(self) -> None:
+        """端口协议：把缓冲区数据推送到线上。"""
+        ...
+
+
+
+    def close(self) -> None:
+        """端口协议：关闭端口。"""
+        ...
 
 
 class _SystemClock:
+
+
+
     def monotonic(self) -> float:
+        """读取系统单调时钟。"""
         return time.monotonic()
 
 
@@ -100,6 +124,7 @@ class _WriteItem:
     require_send_gate: bool = True
     before_write: BeforeWriteHook | None = None
     on_done: WriteCallback | None = None
+
 
 
 def open_port(
@@ -147,6 +172,8 @@ def open_port(
 class SerialLink:
     """单线程串口读写器：接收单消费者，发送有界队列 + 心跳优先 + 写前验锁。"""
 
+
+
     def __init__(
         self,
         port: BytePort,
@@ -163,6 +190,7 @@ class SerialLink:
         min_frame_gap: float = DEFAULT_MIN_FRAME_GAP,
         poll_interval: float = 0.005,
     ) -> None:
+        """保存端口、回调与队列参数，初始化解析器和线程同步原语。"""
         self._port = port
         self._baudrate = max(baudrate, 1)
         self._clock: Clock = clock if clock is not None else _SystemClock()
@@ -193,21 +221,35 @@ class SerialLink:
         if callable(set_rx):
             set_rx(self._wakeup.set)
 
+
+
     @property
     def is_running(self) -> bool:
+        """链路是否处于已启动且未关闭、未故障的状态。"""
         return self._started and not self._closing and not self._faulted
+
+
 
     @property
     def faulted(self) -> bool:
+        """链路是否已进入故障态。"""
         return self._faulted
+
+
 
     @property
     def fault_reason(self) -> str | None:
+        """返回触发故障的原因字符串。"""
         return self._fault_reason
+
+
 
     @property
     def parser(self) -> Parser:
+        """返回接收侧帧解析器，供上层复用。"""
         return self._parser
+
+
 
     def set_callbacks(
         self,
@@ -217,6 +259,7 @@ class SerialLink:
         loop: asyncio.AbstractEventLoop | None = None,
         send_gate: SendGate | None = None,
     ) -> None:
+        """热更新帧回调、故障回调、事件循环与门禁，未传的参数保持不变。"""
         if on_frame is not None:
             self._on_frame = on_frame
         if on_fault is not None:
@@ -226,7 +269,10 @@ class SerialLink:
         if send_gate is not None:
             self._send_gate = send_gate
 
+
+
     def start(self) -> None:
+        """启动后台 I/O 线程；重复启动或链路已关闭时抛异常。"""
         with self._q_lock:
             if self._started:
                 raise RuntimeError("SerialLink 已启动，不要重复 start")
@@ -237,6 +283,8 @@ class SerialLink:
             target=self._run, name="petdog-serial-io", daemon=True
         )
         self._thread.start()
+
+
 
     def enqueue(
         self,
@@ -268,6 +316,8 @@ class SerialLink:
             self._user_queue.append(item)
         self._wakeup.set()
 
+
+
     def enqueue_heartbeat(
         self,
         payload: bytes,
@@ -294,6 +344,8 @@ class SerialLink:
         self._wakeup.set()
         return True
 
+
+
     def close(self, timeout: float = 2.0) -> None:
         """优雅关闭（BA02 第 5 条）：先拒新入队 → 停止循环等在途 write 退出 → 关串口。"""
         with self._q_lock:
@@ -311,7 +363,10 @@ class SerialLink:
 
     # --- 后台 I/O 线程 ---
 
+
+
     def _run(self) -> None:
+        """I/O 线程主循环：先读帧再取队写帧，未预期异常统一转故障态。"""
         try:
             while not self._stop_event.is_set() and not self._faulted:
                 self._poll_read()
@@ -335,6 +390,8 @@ class SerialLink:
         finally:
             self._close_port_quietly()
 
+
+
     def _pop_next(self) -> _WriteItem | None:
         """心跳优先于普通用户写（06:201、N30）。"""
         with self._q_lock:
@@ -346,7 +403,10 @@ class SerialLink:
                 return self._user_queue.popleft()
             return None
 
+
+
     def _process_write(self, item: _WriteItem) -> None:
+        """写前全套校验：排队超时、物理帧间隔、DB 锁健康与 SendGate 竞争。"""
         now = self._clock.monotonic()
 
         # 1. 排队超时检查（超过 1 秒未开始 write 直接退出，不写出到串口）
@@ -484,8 +544,11 @@ class SerialLink:
         else:
             self._execute_write(item)
 
+
+
     def _execute_write(self, item: _WriteItem) -> None:
         # 写前门禁钩子（BA04 撤销竞争障碍点 / SendGate 内授权复核）
+        """真正写端口：按写入结果判定成功、未写或部分写，并预留下一帧间隔。"""
         if item.before_write is not None:
             try:
                 allowed = bool(item.before_write())
@@ -551,7 +614,10 @@ class SerialLink:
             ),
         )
 
+
+
     def _poll_read(self) -> None:
+        """批量读取端口，把完整帧带接收时刻回调出去，最多连续读 8 次。"""
         for _ in range(8):
             try:
                 chunk = self._port.read(64)
@@ -569,7 +635,10 @@ class SerialLink:
                 if self._on_frame is not None:
                     self._dispatch(self._on_frame, frame, received_at)
 
+
+
     def _trip_fault(self, reason: str) -> None:
+        """把链路切到故障态：停发、清空残余队列、关端口并上报原因。"""
         notify = False
         with self._q_lock:
             if not self._faulted:
@@ -582,7 +651,10 @@ class SerialLink:
         if notify and self._on_fault is not None:
             self._dispatch(self._on_fault, reason)
 
+
+
     def _drain_unwritten(self, reason: str) -> None:
+        """把队列里尚未写出的帧统一按未写失败回调。"""
         leftover: list[_WriteItem] = []
         with self._q_lock:
             if self._heartbeat_pending is not None:
@@ -596,9 +668,14 @@ class SerialLink:
                 WriteOutcome(transport=TRANSPORT_WRITE_FAILED, reason=reason),
             )
 
+
+
     def _notify_write(self, item: _WriteItem, outcome: WriteOutcome) -> None:
+        """把单帧的写入结果交给入队方注册的回调。"""
         if item.on_done is not None:
             self._dispatch(item.on_done, outcome)
+
+
 
     def _dispatch(self, fn: Callable, *args) -> None:
         """若绑定了 asyncio 事件循环，统一通过 call_soon_threadsafe 切回主循环线程。"""
@@ -615,7 +692,10 @@ class SerialLink:
         except Exception:
             logger.exception("链路回调执行异常")
 
+
+
     def _close_port_quietly(self) -> None:
+        """关闭端口，吞掉关闭过程中的异常。"""
         # 始终调用 close()（不以 is_open 门控）：BLE 远端断开后 is_open 已变 False，
         # 但仍需关闭后台事件循环线程与底层 WinRT/GATT 句柄，避免句柄泄漏阻塞重连。
         try:

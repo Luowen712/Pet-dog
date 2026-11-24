@@ -16,6 +16,7 @@ from pathlib import Path
 VERSIONS = Path(__file__).resolve().parents[1] / "alembic" / "versions"
 
 
+
 def _load(filename: str):
     """按路径加载迁移模块，仅取其中的常量，不执行迁移。"""
     path = VERSIONS / filename
@@ -23,6 +24,7 @@ def _load(filename: str):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
 
 
 def _squash(sql: str) -> str:
@@ -35,7 +37,9 @@ def _squash(sql: str) -> str:
     return re.sub(r"\s+", "", sql).lower()
 
 
+
 def test_0007_verify_sql_contains_0008_check_expression() -> None:
+    """校验 0007 的 I1 校验语句与 0008 的约束表达式保持一致。"""
     m7 = _load("0007_verify_binding_invariants.py")
     m8 = _load("0008_add_binding_constraints.py")
 

@@ -26,7 +26,7 @@ from fastapi import HTTPException, Request
 
 # 登录失败：账号 5 次 / 15 分钟
 LOGIN_ACCT_LIMIT = 5
-LOGIN_ACCT_WINDOW = 15 * 60
+LOGIN_ACCT_WINDOW = 1 * 60
 
 # 登录失败：来源 IP 30 次 / 15 分钟
 LOGIN_IP_LIMIT = 30
@@ -34,7 +34,7 @@ LOGIN_IP_WINDOW = 15 * 60
 
 # 注册：来源 IP 5 次 / 小时
 REGISTER_IP_LIMIT = 5
-REGISTER_IP_WINDOW = 60 * 60
+REGISTER_IP_WINDOW = 10 * 60
 
 # 每 60 秒做一次全量清理，防止 key 无限增长
 _SWEEP_INTERVAL = 60.0
@@ -139,13 +139,13 @@ def assert_single_process() -> None:
 
     args = iter(sys.argv[1:])
     for arg in args:
-        if arg in ('--workers', '-w'):
-            value = next(args, '')
-        elif arg.startswith('--workers='):
-            value = arg.partition('=')[2]
-        elif arg.startswith('-w') and arg[2:].isdigit():
+        if arg in ("--workers", "-w"):
+            value = next(args, "")
+        elif arg.startswith("--workers="):
+            value = arg.partition("=")[2]
+        elif arg.startswith("-w") and arg[2:].isdigit():
             value = arg[2:]
         else:
             continue
-        if value != '1':
-            raise RuntimeError(f'限流器要求单 worker，收到 {arg} (workers={value})。')
+        if value != "1":
+            raise RuntimeError(f"限流器要求单 worker，收到 {arg} (workers={value})。")

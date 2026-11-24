@@ -210,6 +210,7 @@ DELETE FROM legacy_row_archive WHERE source_table = '{table}'
 """
 
 
+
 def upgrade() -> None:
     """先归档再删除两类补不出 device_pk 的行。"""
     # 先归档 —— 顺序不能反，反了就是删完才发现没留证据
@@ -218,6 +219,7 @@ def upgrade() -> None:
     # 再删 —— 只删归档表里确实存在的
     op.execute(DELETE_ARCHIVED_SQL.format(table="command_log"))
     op.execute(DELETE_ARCHIVED_SQL.format(table="telemetry"))
+
 
 
 def downgrade() -> None:

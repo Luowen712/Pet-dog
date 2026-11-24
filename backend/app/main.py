@@ -47,7 +47,9 @@ _DEFAULT_DEV_CORS_ORIGINS = [
 ]
 
 
+
 def _resolve_cors_origins() -> list[str]:
+    """解析允许的跨域来源：默认放行本机开发端口，并显式剔除通配符。"""
     raw = os.environ.get("PETDOG_CORS_ORIGINS", "").strip()
     if not raw:
         return list(_DEFAULT_DEV_CORS_ORIGINS)
@@ -55,7 +57,9 @@ def _resolve_cors_origins() -> list[str]:
     return origins or list(_DEFAULT_DEV_CORS_ORIGINS)
 
 
+
 def _health_mode() -> str:
+    """按串口配置推断链路模式：sim、ble 或 serial。"""
     spec = settings.SERIAL_PORT.strip().lower()
     if spec == "sim" or spec.startswith("loop://"):
         return "sim"
@@ -64,7 +68,9 @@ def _health_mode() -> str:
     return "serial"
 
 
+
 def _require_schema():
+    """校验数据库迁移版本与代码一致，不一致直接拒绝启动。"""
     expected = set(ScriptDirectory(str(BASE_DIR.parent / 'alembic')).get_heads())
     with engine.connect() as conn:
         current = set(MigrationContext.configure(conn).get_current_heads())
@@ -75,7 +81,9 @@ def _require_schema():
         )
 
 
+
 def _resolve_device_pk(app: FastAPI) -> int | None:
+    """确定串口会话对应的设备主键；多设备且未配置时返回 None 并记错误。"""
     pk = getattr(app.state, 'device_pk', settings.SERIAL_DEVICE_PK)
     with SessionLocal() as db:
         if pk is not None:
@@ -88,6 +96,7 @@ def _resolve_device_pk(app: FastAPI) -> int | None:
         logger.error('有多台设备，设置 SERIAL_DEVICE_PK 后重启以启用串口控制')
         return None
     return int(rows[0][0]) if rows else None
+
 
 
 async def _session_maintenance_loop(
@@ -160,7 +169,9 @@ _BLE_LINK_LOSS = ("serial_read_error", "serial_write_error")
 _BLE_RECONNECT_DELAYS = (1.0, 2.0, 3.0, 5.0, 5.0, 10.0, 10.0, 10.0, 15.0, 15.0)
 
 
+
 def _schedule_ble_reconnect(app: FastAPI, session: DeviceSession, address: str) -> None:
+    """链路类故障时排一个退避重连任务；已有任务在跑或故障类型不符则跳过。"""
     if not (session.fault_reason or "").startswith(_BLE_LINK_LOSS):
         return
     old = getattr(app.state, "reconnect_task", None)
@@ -171,7 +182,9 @@ def _schedule_ble_reconnect(app: FastAPI, session: DeviceSession, address: str) 
     )
 
 
+
 async def _reconnect_ble(app: FastAPI, session: DeviceSession, address: str) -> None:
+    """按退避序列重连 BLE，成功后重建会话并发布回执；会话已被替换则放弃。"""
     delays = getattr(app.state, "ble_reconnect_delays", _BLE_RECONNECT_DELAYS)
     port_override = getattr(app.state, "ble_port_override", None)
     for n, delay in enumerate(delays, 1):
@@ -212,7 +225,9 @@ async def _reconnect_ble(app: FastAPI, session: DeviceSession, address: str) -> 
     logger.warning("BLE 自动重连多次失败，请检查桌宠供电后在设备页手动重连")
 
 
+
 async def stop_device_session(app: FastAPI) -> None:
+    """取消后台维护任务并关闭当前设备会话。"""
     ticker_task = getattr(app.state, "ticker_task", None)
     app.state.ticker_task = None
     if ticker_task is not None:
@@ -230,6 +245,7 @@ async def stop_device_session(app: FastAPI) -> None:
             app.state.device_session = None
 
 
+
 async def stop_ble_session_if_matching(app: FastAPI, device_pks: set[int]) -> None:
     """解绑或注销后若当前占用动态 BLE 链路，主动断开以便 ECB02H2 重新广播。"""
     if not device_pks:
@@ -237,6 +253,7 @@ async def stop_ble_session_if_matching(app: FastAPI, device_pks: set[int]) -> No
     from app.link.ble_link import BleBytePort
 
     async def _maybe_stop() -> None:
+        """仅当会话占用的是动态蓝牙链路时才断开，便于模块重新广播。"""
         sess = getattr(app.state, "device_session", None)
         if (
             sess is not None
@@ -257,6 +274,7 @@ async def stop_ble_session_if_matching(app: FastAPI, device_pks: set[int]) -> No
         await _maybe_stop()
 
 
+
 async def start_device_session(
     app: FastAPI,
     device_pk: int,
@@ -265,6 +283,7 @@ async def start_device_session(
     port_spec: str | None = None,
     is_sim: bool | None = None,
 ) -> DeviceSession | None:
+    """为指定设备建串口链路与会话，并启动心跳与上行超时检查任务。"""
     await stop_device_session(app)
 
     loop = asyncio.get_running_loop()
@@ -339,6 +358,7 @@ async def start_device_session(
     return session
 
 
+
 # 启动钩子（BA02 第 1、5 条）：
 # 1. 先取本机排他进程锁，再取 MySQL 实例锁；任一失败拒绝启动，绝不降级无锁运行；
 # 2. 清理上次未完成的 revoking 账号；
@@ -347,6 +367,7 @@ async def start_device_session(
 # 4. 关闭时按反序：先停后台任务 → 关设备会话 → 放 DB 实例锁 → 放主机锁。
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """应用启停装配：先取主机锁与实例锁，再建会话；退出时反序释放。"""
     host_lock_path = getattr(app.state, "host_lock_path", None)
     db_lock_name = getattr(app.state, "db_lock_name", LOCK_NAME)
 
@@ -441,8 +462,10 @@ app.include_router(setup.router)
 app.include_router(faces.router)
 
 
+
 @app.get("/docs", include_in_schema=False)
 def custom_docs():
+    """返回使用本地静态资源的 Swagger UI，不依赖境外 CDN。"""
     return get_swagger_ui_html(
         openapi_url=app.openapi_url,
         title=app.title + " - Swagger UI",
@@ -452,8 +475,10 @@ def custom_docs():
     )
 
 
+
 @app.get("/api/health")
 def health():
+    """健康检查：返回运行状态、链路模式与协议版本。"""
     return ok(
         {
             "status": "ok",

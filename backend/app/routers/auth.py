@@ -24,7 +24,9 @@ class LoginIn(BaseModel):
     password: str
 
 
+
 def user_out(u: User) -> dict:
+    """把用户对象转成返回给前端的精简字段。"""
     return {
         "id": u.id,
         "username": u.username,
@@ -33,10 +35,12 @@ def user_out(u: User) -> dict:
     }
 
 
+
 @router.post("/login")
 def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
     # 两套键同时判：账号 5 次/15 分钟防定向爆破，IP 30 次/15 分钟防撞库。
     # 账号键统一小写，避免用 Admin/ADMIN 分流绕过（库里 username 比较本身不区分大小写）。
+    """按账号与 IP 双维度限流后校验密码，通过则顺手升级旧哈希并签发令牌。"""
     acct_key = "login:acct:" + body.username.strip().lower()
     ip_key = "login:ip:" + rl.client_ip(request)
 
@@ -68,8 +72,10 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
     )
 
 
+
 @router.get("/me")
 def me(user: dict = Depends(current_user), db: Session = Depends(get_db)):
+    """返回当前登录用户的精简信息。"""
     u = db.query(User).filter(User.id == user.get("uid")).first()
     if not u:
         raise HTTPException(401, detail={"code": 40101, "message": "登录已过期"})
@@ -84,8 +90,10 @@ class RegisterIn(BaseModel):
 USERNAME_RE = re.compile(r"[a-zA-Z0-9_\u4e00-\u9fa5]{3,20}")
 
 
+
 @router.post("/register")
 def register(body: RegisterIn, request: Request, db: Session = Depends(get_db)):
+    """按 IP 限流并校验用户名与密码格式，通过后创建账号。"""
     ip_key = "register:ip:" + rl.client_ip(request)
     wait = rl.check(ip_key, rl.REGISTER_IP_LIMIT, rl.REGISTER_IP_WINDOW)
     if wait:
@@ -116,8 +124,10 @@ def register(body: RegisterIn, request: Request, db: Session = Depends(get_db)):
     return ok(user_out(u))
 
 
+
 @router.post("/logout")
 def logout(user: dict = Depends(current_user), db: Session = Depends(get_db)):
+    """递增令牌版本让旧令牌立即失效，释锁后广播撤销事件。"""
     uid = user.get("uid")
     new_tv: int | None = None
     with send_gate.hold():
@@ -138,12 +148,14 @@ class ChangePasswordIn(BaseModel):
     new_password: str
 
 
+
 @router.put("/password")
 def change_password(
     body: ChangePasswordIn,
     user: dict = Depends(current_user),
     db: Session = Depends(get_db),
 ):
+    """校验原密码与新密码规则，更新哈希并递增令牌版本强制重新登录。"""
     uid = user.get("uid")
     u = db.query(User).filter(User.id == uid).first()
     if not u or u.status != "active":
@@ -181,15 +193,18 @@ class AccountDeleteIn(BaseModel):
     confirm_username: str
 
 
+
 @router.delete("/account")
 async def delete_account(
     body: AccountDeleteIn,
     request: Request,
     user: dict = Depends(current_user),
 ):
+    """校验密码与确认用户名后注销账号：解绑设备、改名、状态置 revoking。"""
     uid = user.get("uid")
 
     def _verify_and_revoke():
+        """在门禁与事务内完成密码校验、管理员守卫、解绑与注销，返回解绑设备或错误。"""
         with SessionLocal() as db:
             u = db.query(User).filter(User.id == uid).first()
             if not u or u.status != "active":

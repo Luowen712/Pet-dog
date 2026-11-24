@@ -47,7 +47,10 @@ class LockUnavailable(Exception):
 class ProcessLock:
     """一把 MySQL 命名锁，独占一根不归还连接池的物理连接。"""
 
+
+
     def __init__(self, name: str = LOCK_NAME, db_url: str | None = None) -> None:
+        """记录锁名与数据库地址，物理连接留到 acquire 时再建。"""
         if db_url is None:
             from app.config import settings
 
@@ -59,12 +62,17 @@ class ProcessLock:
         self._holder_id: int | None = None
         self._mu = threading.Lock()
 
+
+
     @property
     def holder_id(self) -> int | None:
         """取得锁时自己的 CONNECTION_ID()，没拿到为 None。"""
         return self._holder_id
 
+
+
     def acquire(self) -> None:
+        """建独立 AUTOCOMMIT 连接并取 GET_LOCK；单写校验不过或锁被占用即抛 LockUnavailable。"""
         with self._mu:
             if self._conn is not None:
                 raise RuntimeError(f"锁 {self._name} 已在本对象上取得，不要重复 acquire")
@@ -110,6 +118,8 @@ class ProcessLock:
             self._engine = engine
             self._conn = conn
 
+
+
     def still_held(self) -> bool:
         """每次发送前调用。连接断了也算丢锁，不抛异常。"""
         with self._mu:
@@ -122,6 +132,8 @@ class ProcessLock:
             except Exception:
                 return False
             return holder == self._holder_id
+
+
 
     def release(self) -> None:
         """幂等：没取得过、已释放过、连接已死，都静默成功。
@@ -156,16 +168,25 @@ class HostProcessLock:
            不会留下需要手工删掉的「死锁文件」。
     """
 
+
+
     def __init__(self, path: Path | str | None = None) -> None:
+        """记录锁文件路径，文件描述符留到 acquire 时再打开。"""
         self._path = Path(path) if path is not None else DEFAULT_HOST_LOCK_PATH
         self._fd: int | None = None
         self._mu = threading.Lock()
 
+
+
     @property
     def path(self) -> Path:
+        """返回主机锁文件所在路径。"""
         return self._path
 
+
+
     def acquire(self) -> None:
+        """打开锁文件并加非阻塞排他锁，已被占用则抛 LockUnavailable。"""
         with self._mu:
             if self._fd is not None:
                 raise RuntimeError(f"主机锁 {self._path} 已在本对象上取得，不要重复 acquire")
@@ -188,9 +209,14 @@ class HostProcessLock:
                 ) from exc
             self._fd = fd
 
+
+
     def still_held(self) -> bool:
+        """文件描述符仍在即视为持锁；进程崩溃时锁由内核自动回收。"""
         with self._mu:
             return self._fd is not None
+
+
 
     def release(self) -> None:
         """幂等释放：未取得或已释放均静默返回。"""
@@ -201,6 +227,7 @@ class HostProcessLock:
                 return
             if os.name == "nt":
                 def _unlock_win() -> None:
+                    """Windows 下解除文件锁，先回到文件头再解锁。"""
                     os.lseek(fd, 0, os.SEEK_SET)
                     msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
 
@@ -209,12 +236,19 @@ class HostProcessLock:
                 _quiet(lambda: fcntl.flock(fd, fcntl.LOCK_UN))
             _quiet(lambda: os.close(fd))
 
+
+
     def __enter__(self) -> "HostProcessLock":
+        """上下文管理器入口：取锁后返回自身。"""
         self.acquire()
         return self
 
+
+
     def __exit__(self, exc_type, exc, tb) -> None:
+        """上下文管理器出口：无条件释放锁。"""
         self.release()
+
 
 
 def _quiet(fn) -> None:

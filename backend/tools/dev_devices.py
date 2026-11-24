@@ -40,6 +40,7 @@ DEFAULT_PREFIX = "DEV-TEST-"
 DEFAULT_NAME = "测试桌宠"
 
 
+
 def _next_seq(db, prefix: str) -> int:
     """找到 prefix 下已用的最大编号，返回下一个可用号。
 
@@ -54,7 +55,9 @@ def _next_seq(db, prefix: str) -> int:
     return biggest + 1
 
 
+
 def cmd_add(args) -> int:
+    """按前缀续号批量创建设备，保持无主可认领状态。"""
     db = SessionLocal()
     try:
         start = _next_seq(db, args.prefix)
@@ -85,7 +88,9 @@ def cmd_add(args) -> int:
         db.close()
 
 
+
 def cmd_list(args) -> int:
+    """列出全部设备及其归属、绑定纪元与遥测条数。"""
     db = SessionLocal()
     try:
         rows = db.query(Device).order_by(Device.id).all()
@@ -114,6 +119,7 @@ def cmd_list(args) -> int:
         db.close()
 
 
+
 def _resolve(db, ref: str):
     """先按主键找，找不到再按 device_id 找。人手敲的时候两种都可能。"""
     if ref.isdigit():
@@ -121,6 +127,7 @@ def _resolve(db, ref: str):
         if d:
             return d
     return db.query(Device).filter(Device.device_id == ref).first()
+
 
 
 def cmd_release(args) -> int:
@@ -153,7 +160,9 @@ def cmd_release(args) -> int:
         db.close()
 
 
+
 def main() -> int:
+    """解析 add、list、release 三个子命令并分发执行。"""
     p = argparse.ArgumentParser(
         prog="dev_devices.py",
         description="开发期设备管理：造设备 / 查看 / 解绑还原",

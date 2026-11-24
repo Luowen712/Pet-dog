@@ -42,10 +42,12 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+
 def upgrade() -> None:
     """按 device_id 反查 device.id，回填 command_log / telemetry 的 device_pk。"""
     op.execute(COMMAND_LOG_SQL)
     op.execute(TELEMETRY_SQL)
+
 
 
 def downgrade() -> None:

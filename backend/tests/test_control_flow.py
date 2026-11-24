@@ -12,8 +12,10 @@ from app.models import Device, User
 from app.security import hash_pwd, make_token
 
 
+
 @pytest.fixture
 def sim(monkeypatch, tmp_path):
+    """准备两个账号、一台模拟设备与已启动的应用，返回客户端和请求头。"""
     with SessionLocal.begin() as db:
         pw = hash_pwd('secret-pass-1234')
         users = [User(username=uuid.uuid4().hex[:16], password_hash=pw, status='active', token_version=0) for _ in range(2)]
@@ -33,7 +35,9 @@ def sim(monkeypatch, tmp_path):
         yield client, pk, headers, other_name
 
 
+
 def test_sim_control_roundtrip(sim):
+    """模拟链路上完成一次动作下发，回执与状态快照都能对上。"""
     client, pk, (headers, foreign), _ = sim
     for _ in range(200):
         if app.state.device_session.control_state == 'ready':
@@ -70,18 +74,23 @@ def test_sim_control_roundtrip(sim):
         assert ws.receive()['code'] == 4003
 
 
+
 @pytest.mark.parametrize('args', [['--workers', '1'], ['--workers=1'], ['-w1']])
 def test_explicit_single_worker(monkeypatch, args):
+    """显式声明单 worker 时应允许启动。"""
     import sys
     from app.ratelimit import assert_single_process
     monkeypatch.setattr(sys, 'argv', ['uvicorn', *args])
     assert_single_process()
 
 
+
 def test_connection_limit_and_logout_closes_live_sockets(sim):
+    """同一账号连接数受限，登出会主动断开已建立的连接。"""
     from contextlib import ExitStack
     client, pk, (headers, _), _ = sim
     def connect():
+        """用票据建立一条 WebSocket 连接。"""
         ticket = client.post('/api/events/ticket', json={'device_id': pk}, headers=headers).json()['data']['ticket']
         return client.websocket_connect(f'/ws/device?device_id={pk}&ticket={ticket}')
     with ExitStack() as stack:
@@ -99,7 +108,9 @@ def test_connection_limit_and_logout_closes_live_sockets(sim):
                 pytest.fail('old socket remained open after logout')
 
 
+
 def test_no_ack_late_done_corrects_original_without_resending(sim, monkeypatch):
+    """丢 ACK 后迟到的完成帧能纠正原回执，且不会重发指令。"""
     from app.link.simulator import SimFaults
     client, pk, (headers, _), _ = sim
     session = app.state.device_session
@@ -126,7 +137,9 @@ def test_no_ack_late_done_corrects_original_without_resending(sim, monkeypatch):
     assert session.last_seq == 1 and session.control_state == 'ready'
 
 
+
 def test_dual_account_delete_preserves_other_session_and_inflight_command(sim, monkeypatch):
+    """一个账号注销不影响另一账号的会话与在途指令。"""
     from app.link.simulator import SimFaults
     client, pk, (owner_h, other_h), other_name = sim
     session = app.state.device_session
@@ -153,7 +166,9 @@ def test_dual_account_delete_preserves_other_session_and_inflight_command(sim, m
     assert session.control_state == 'ready'
 
 
+
 def test_password_change_closes_live_ws_with_4401(sim):
+    """改密码后现有连接应以 4401 关闭。"""
     client, pk, (headers, _), _ = sim
     ticket = client.post('/api/events/ticket', json={'device_id': pk}, headers=headers).json()['data']['ticket']
     with client.websocket_connect(f'/ws/device?device_id={pk}&ticket={ticket}') as ws:
@@ -169,7 +184,9 @@ def test_password_change_closes_live_ws_with_4401(sim):
             pytest.fail('live socket stayed open after password change')
 
 
+
 def test_schema_mismatch_and_ambiguous_serial_device_guard(monkeypatch):
+    """迁移版本不匹配、多设备未指定主键都必须拒绝启动。"""
     from types import SimpleNamespace
     from alembic.migration import MigrationContext
     monkeypatch.setattr(MigrationContext, 'get_current_heads', lambda self: ('0001',))

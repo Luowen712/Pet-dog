@@ -47,6 +47,7 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+
 def upgrade() -> None:
     """Upgrade schema."""
     # ---- command_log：8 列 ----
@@ -83,6 +84,7 @@ def upgrade() -> None:
     # ---- user：1 列 ----
     # deleted_at 只记软删除时间；账号状态仍以 status(active/revoking/revoked) 为准
     op.add_column("user", sa.Column("deleted_at", sa.DateTime(), nullable=True))
+
 
 
 def downgrade() -> None:

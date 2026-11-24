@@ -18,15 +18,19 @@ from app.services.ownership import (
 client = TestClient(app)
 
 
+
 def _mk_user(db, username: str) -> User:
+    """造一个普通用户。"""
     u = User(username=username, password_hash="x" * 64, role="user", status="active")
     db.add(u)
     db.commit()
     return u
 
 
+
 def _mk_device(db, device_id: str, owner_id=None, be: int = 0) -> Device:
     # ck_device_owner_status：有主必 bound，无主必非 bound
+    """造一台设备，按有无归属决定绑定状态。"""
     d = Device(
         device_id=device_id,
         owner_id=owner_id,
@@ -39,7 +43,9 @@ def _mk_device(db, device_id: str, owner_id=None, be: int = 0) -> Device:
     return d
 
 
+
 def test_battery_is_none_without_telemetry():
+    """没有遥测时电量应返回 None，而不是 0。"""
     db = SessionLocal()
     try:
         u = _mk_user(db, "own_notel")
@@ -48,6 +54,7 @@ def test_battery_is_none_without_telemetry():
         assert battery_of(latest_telemetry(db, d)) is None
     finally:
         db.close()
+
 
 
 def test_latest_telemetry_ignores_old_binding_epoch():
@@ -65,6 +72,7 @@ def test_latest_telemetry_ignores_old_binding_epoch():
         assert battery_of(t) == 15
     finally:
         db.close()
+
 
 
 def test_batch_map_matches_single_query():
@@ -88,7 +96,9 @@ def test_batch_map_matches_single_query():
         db.close()
 
 
+
 def test_get_owned_device_rejects_other_owner():
+    """查设备只返回本人的，别人的一律 None。"""
     db = SessionLocal()
     try:
         a = _mk_user(db, "own_a")
@@ -101,7 +111,9 @@ def test_get_owned_device_rejects_other_owner():
         db.close()
 
 
+
 def _token_for(db, username: str) -> tuple[User, str]:
+    """造用户并签发令牌，返回用户与令牌。"""
     u = _mk_user(db, username)
     return u, make_token(u.id, u.username, u.token_version)
 
@@ -112,13 +124,16 @@ def _token_for(db, username: str) -> tuple[User, str]:
 # delete() 不接受 json 参数，用 request("DELETE", ...) 才能带请求体。
 
 
+
 def _unbind(token: str, pk: int, confirm: int):
+    """带令牌调用设备解绑接口。"""
     return client.request(
         "DELETE",
         f"/api/devices/{pk}/binding",
         headers={"Authorization": f"Bearer {token}"},
         json={"confirm_device_id": confirm},
     )
+
 
 
 def test_unbind_clears_five_columns_and_bumps_epoch():
@@ -153,6 +168,7 @@ def test_unbind_clears_five_columns_and_bumps_epoch():
         db2.close()
 
 
+
 def test_unbind_confirm_mismatch_returns_40002():
     """confirm_device_id 与路径 id 不一致时拒绝，且不许改动任何数据。"""
     db = SessionLocal()
@@ -178,6 +194,7 @@ def test_unbind_confirm_mismatch_returns_40002():
         db2.close()
 
 
+
 def test_unbind_rejects_other_owner():
     """不是本人的设备一律 40400，不能因为错误码不同暴露设备存在性。"""
     db = SessionLocal()
@@ -190,6 +207,7 @@ def test_unbind_rejects_other_owner():
         assert r.json()["code"] == 40400
     finally:
         db.close()
+
 
 
 def test_unbind_twice_returns_40400_not_40900():

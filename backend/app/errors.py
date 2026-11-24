@@ -11,12 +11,13 @@ from app.resp import fail
 logger = logging.getLogger(__name__)
 
 
+
 def register_handlers(app: FastAPI) -> None:
     """异常处理器"""
 
     @app.exception_handler(HTTPException)
     async def on_http_error(request: Request, exc: HTTPException):
-
+        """把 HTTPException 转成统一响应外壳，并按需透出 reason、retry_after。"""
         detail = exc.detail
         headers: dict[str, str] = {}
         if isinstance(detail, dict):

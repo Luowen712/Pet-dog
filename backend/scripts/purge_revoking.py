@@ -9,7 +9,9 @@ from app.db import SessionLocal
 from app.services.purge import purge_revoking
 
 
+
 def main():
+    """执行一次注销清理并打印结果，有失败项则以非零码退出。"""
     db = SessionLocal()
     try:
         r = purge_revoking(db)

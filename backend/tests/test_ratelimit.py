@@ -27,12 +27,16 @@ USER_A = "rl_case_a"
 USER_B = "rl_case_b"
 
 
+
 def _cleanup(db) -> None:
+    """清掉限流用例创建的 rl_ 前缀账号。"""
     db.query(User).filter(User.username.like("rl_%")).delete(synchronize_session=False)
     db.commit()
 
 
+
 def _make_user(db, username: str) -> None:
+    """造一个可用于登录的普通账号。"""
     db.add(
         User(
             username=username,
@@ -43,6 +47,7 @@ def _make_user(db, username: str) -> None:
         )
     )
     db.commit()
+
 
 
 def test_login_locks_account_after_five_failures():
@@ -82,6 +87,7 @@ def test_login_locks_account_after_five_failures():
         db.close()
 
 
+
 def test_account_bucket_does_not_leak_to_other_user():
     """A 的账号桶打满，不能连累 B —— 否则一个人被爆破，全家都登不上。"""
 
@@ -112,6 +118,7 @@ def test_account_bucket_does_not_leak_to_other_user():
         db.close()
 
 
+
 def test_successful_login_does_not_consume_quota():
     """成功登录不计入失败桶：连登 8 次（超过阈值 5）也不该被限。"""
 
@@ -135,6 +142,7 @@ def test_successful_login_does_not_consume_quota():
         _cleanup(db)
     finally:
         db.close()
+
 
 
 def test_register_limits_by_ip():
@@ -170,6 +178,7 @@ def test_register_limits_by_ip():
         db.close()
 
 
+
 def test_invalid_register_does_not_consume_quota():
     """格式不合法的注册不该消耗额度，否则前端调格式就把用户锁在门外。"""
 
@@ -195,6 +204,7 @@ def test_invalid_register_does_not_consume_quota():
         db.close()
 
 
+
 def test_multi_worker_is_rejected(monkeypatch):
     """WEB_CONCURRENCY > 1 → 拒绝启动（契约：多 worker 必须拒绝，不能降级）。"""
 
@@ -204,6 +214,7 @@ def test_multi_worker_is_rejected(monkeypatch):
 
     monkeypatch.setenv("WEB_CONCURRENCY", "1")
     ratelimit.assert_single_process()
+
 
 
 def test_workers_flag_is_rejected(monkeypatch):

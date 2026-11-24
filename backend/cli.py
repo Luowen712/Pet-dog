@@ -37,14 +37,21 @@ USERNAME_RE = re.compile(r"[a-zA-Z0-9_\u4e00-\u9fa5]{3,20}")
 
 
 class CliError(RuntimeError):
+
+
+
     def __init__(self, message: str, exit_code: int = 2):
+        """记录退出码，供 main 决定进程返回值。"""
         super().__init__(message)
         self.exit_code = exit_code
 
 
+
 def _validate_password(pw: str) -> None:
+    """校验密码长度是否在允许区间内。"""
     if not (PASSWORD_MIN <= len(pw) <= PASSWORD_MAX):
         raise CliError("密码需要 %d–%d 位" % (PASSWORD_MIN, PASSWORD_MAX))
+
 
 
 def _assert_interactive_terminal() -> None:
@@ -68,6 +75,7 @@ def _assert_interactive_terminal() -> None:
         raise CliError("当前不是交互式终端（TTY），拒绝通过管道读取密码")
 
 
+
 def _read_password(prompt: str = "密码: ") -> str:
     """五步保护下的密码读取：① ② ③ 在 _assert_interactive_terminal，
     ④ ⑤ 在这里——因为后两步必须紧贴 getpass 调用。"""
@@ -89,7 +97,9 @@ def _read_password(prompt: str = "密码: ") -> str:
     return first
 
 
+
 def cmd_create_admin(username: str) -> int:
+    """交互式读取密码并创建管理员，全程持主机锁与命名锁。"""
     username = username.strip()
     if not USERNAME_RE.fullmatch(username):
         raise CliError("用户名需 3–20 位字母、数字、下划线或中文")
@@ -120,7 +130,9 @@ def cmd_create_admin(username: str) -> int:
     return 0
 
 
+
 def cmd_list_admin() -> int:
+    """以表格形式列出全部管理员账号（只读，不加锁）。"""
     db = SessionLocal()
     try:
         rows = db.query(User).filter(User.role == "admin").order_by(User.id).all()
@@ -140,7 +152,9 @@ def cmd_list_admin() -> int:
     return 0
 
 
+
 def cmd_reset(username: str) -> int:
+    """交互式重置密码，并递增令牌版本踢掉所有旧 token。"""
     username = username.strip()
 
     password = _read_password()
@@ -173,7 +187,9 @@ USAGE = """用法：
   python cli.py reset <username>          交互式重置密码并踢掉旧 token"""
 
 
+
 def main(argv=None) -> int:
+    """解析子命令并统一处理参数错误、锁失败与未预期异常的退出码。"""
     args = sys.argv[1:] if argv is None else argv
 
     if not args:

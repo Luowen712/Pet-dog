@@ -66,19 +66,26 @@ RevokeListener = Callable[[RevokeEvent], None]
 class SendGate:
     """进程内同步门禁锁：只在线程中使用（06:201）。"""
 
+
+
     def __init__(self, default_timeout: float = DEFAULT_GATE_TIMEOUT) -> None:
+        """初始化门禁锁、撤销监听器表与默认等待超时。"""
         self._lock = threading.Lock()
         self._listeners_mu = threading.Lock()
         self._listeners: list[RevokeListener] = []
         self._default_timeout = default_timeout
         self._hold_seq = 0
 
+
+
     @property
     def default_timeout(self) -> float:
+        """返回门禁默认等待超时（秒）。"""
         return self._default_timeout
 
     @property
     def hold_seq(self) -> int:
+        """持锁次数计数：调用方据此判断临界区是否被推进过。"""
         return self._hold_seq
 
     @contextmanager
@@ -94,12 +101,15 @@ class SendGate:
         finally:
             self._lock.release()
 
+
+
     def register_revoke_listener(self, listener: RevokeListener) -> Callable[[], None]:
         """注册撤销监听器（如 DeviceSession / WS Hub / TicketStore），返回取消函数。"""
         with self._listeners_mu:
             self._listeners.append(listener)
 
         def _unregister() -> None:
+            """把已注册的监听器移出列表，重复调用不报错。"""
             with self._listeners_mu:
                 try:
                     self._listeners.remove(listener)
@@ -107,6 +117,8 @@ class SendGate:
                     pass
 
         return _unregister
+
+
 
     def notify_revoke(self, event: RevokeEvent) -> None:
         """在 SendGate 释锁后广播撤销事件，监听器异常只记日志不反向影响已提交事务。"""
@@ -118,6 +130,8 @@ class SendGate:
             except Exception:
                 # DB 已经提交成功，监听器异常只记日志，绝不伪造「提交失败」
                 logger.exception("SendGate 撤销监听器执行异常: kind=%s", event.kind)
+
+
 
     def revoke_access(
         self,
@@ -154,6 +168,7 @@ class SendGate:
 
 # 进程唯一门禁实例：BA 与 BB 共用这一把，禁止各自另建第二把。
 send_gate = SendGate()
+
 
 
 def revoke_access(
