@@ -107,7 +107,8 @@ async def _session_maintenance_loop(
     """
     loop = asyncio.get_running_loop()
     last_hb = loop.time() - heartbeat_interval  # 启动后尽快发首帧心跳
-    step = max(0.01, min(check_interval, heartbeat_interval))
+    last_uplink_chk = loop.time() - check_interval
+    step = max(0.01, min(check_interval, heartbeat_interval, 0.1))
     try:
         while True:
             try:
@@ -122,9 +123,12 @@ async def _session_maintenance_loop(
                     except Exception:
                         logger.exception("后台心跳入队异常")
                     last_hb = now
-                # 已上线且通过准备门禁、仅差首帧 0x03 快照时主动催一次状态（内部限频 ≥1s），
+                # 已上线且通过准备门禁、仅差首帧 0x03 快照（或联调模式尚未拿到遥测）时主动催一次状态（内部限频 ≥1s），
                 # 既让真机上线后不必苦等 5 秒周期，也让无线程 SIM 自动进入 ready。
-                if session.online and session.control_state == "unconfigured":
+                if session.online and (
+                    session.control_state == "unconfigured"
+                    or getattr(session, "needs_initial_status", False)
+                ):
                     try:
                         session.poll_status()
                     except LinkClosedError:
@@ -133,7 +137,9 @@ async def _session_maintenance_loop(
                         logger.exception("后台首帧催状态异常")
                 try:
                     session.check_command_timeout()
-                    await asyncio.to_thread(session.check_uplink_timeout)
+                    if (now - last_uplink_chk) >= check_interval:
+                        await asyncio.to_thread(session.check_uplink_timeout)
+                        last_uplink_chk = now
                 except Exception:
                     logger.exception("后台上行超时检查异常")
             except asyncio.CancelledError:

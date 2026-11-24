@@ -216,6 +216,7 @@ class DeviceSession:
         self._last_heartbeat: datetime | None = None
         self._last_poll_sent_at: float | None = None
         self._poll_timer: threading.Timer | None = None
+        self._desired_face: tuple[int, float, int] | None = None  # (face, written_at, retries)
 
         # 0x03 缓存字段：未知一律 None，绝不回填 0（06:44）
         self._state_revision: int = 0
@@ -268,6 +269,16 @@ class DeviceSession:
     def online(self) -> bool:
         with self._mu:
             return self._online
+
+    @property
+    def needs_initial_status(self) -> bool:
+        with self._mu:
+            return (
+                self._bench_mode
+                and self._last_poll_sent_at is None
+                and self._face is None
+                and self._battery is None
+            )
 
     @property
     def fault_reason(self) -> str | None:
@@ -644,7 +655,14 @@ class DeviceSession:
                 )
             def _after_face_write(outcome: WriteOutcome) -> None:
                 if outcome.transport == TRANSPORT_OK:
-                    self._request_status_poll_after_face()
+                    with self._mu:
+                        written_at = (
+                            outcome.written_at
+                            if outcome.written_at is not None
+                            else self._clock.monotonic()
+                        )
+                        self._desired_face = (face, written_at, 0)
+                        self._request_status_poll_locked()
                 if on_write is not None:
                     on_write(outcome)
 
@@ -661,46 +679,40 @@ class DeviceSession:
         if timer is not None:
             timer.cancel()
 
-    def _request_status_poll_after_face(self) -> None:
-        """0x07 写线成功后立即催一次 0x06 拉新表情，避免网页苦等 5 秒周期；
+    def _request_status_poll_locked(self) -> None:
+        """催一次 0x06 拉新状态，避免网页苦等 5 秒周期；
         若仍在 1 秒冷却窗内则合并调度一次延迟 0x06，遵守 06 第 12.2 节。"""
-        with self._mu:
-            if self._closing or self._faulted:
-                return
-            now = self._clock.monotonic()
-            if (
-                self._last_poll_sent_at is None
-                or (now - self._last_poll_sent_at) >= POLL_MIN_INTERVAL_SEC
-            ):
-                try:
-                    self._link.enqueue(
-                        build(CMD_POLL_STATUS),
-                        require_send_gate=False,
-                    )
-                    self._last_poll_sent_at = now
-                    self._cancel_poll_timer_locked()
-                except (LinkClosedError, QueueFullError):
-                    pass
-                return
-            if self._poll_timer is None:
-                delay = max(
-                    0.05,
-                    POLL_MIN_INTERVAL_SEC - (now - self._last_poll_sent_at) + 0.03,
+        if self._closing or self._faulted:
+            return
+        now = self._clock.monotonic()
+        if (
+            self._last_poll_sent_at is None
+            or (now - self._last_poll_sent_at) >= POLL_MIN_INTERVAL_SEC
+        ):
+            try:
+                self._link.enqueue(
+                    build(CMD_POLL_STATUS),
+                    require_send_gate=False,
                 )
-                timer = threading.Timer(delay, self._on_deferred_poll_timer)
-                timer.daemon = True
-                self._poll_timer = timer
-                timer.start()
+                self._last_poll_sent_at = now
+                self._cancel_poll_timer_locked()
+            except (LinkClosedError, QueueFullError):
+                pass
+            return
+        if self._poll_timer is None:
+            delay = max(
+                0.05,
+                POLL_MIN_INTERVAL_SEC - (now - self._last_poll_sent_at) + 0.03,
+            )
+            timer = threading.Timer(delay, self._on_deferred_poll_timer)
+            timer.daemon = True
+            self._poll_timer = timer
+            timer.start()
 
     def _on_deferred_poll_timer(self) -> None:
         with self._mu:
             self._poll_timer = None
-            if self._closing or self._faulted:
-                return
-            try:
-                self.poll_status()
-            except (LinkClosedError, QueueFullError):
-                pass
+            self._request_status_poll_locked()
 
     def send_heartbeat(self, *, on_write: WriteCallback | None = None) -> bool:
         """入队 0x04 心跳请求（合并且优先于用户写）。"""
@@ -737,6 +749,8 @@ class DeviceSession:
                 if slot.deadline is not None and now >= slot.deadline:
                     if self._bench_mode:
                         self._pending.pop(seq, None)
+                        if self._action == slot.action:
+                            self._action = 0
                     else:
                         self._pending[seq] = replace(slot, uncertain=True, deadline=None)
                         self._recovery_required = True
@@ -892,6 +906,15 @@ class DeviceSession:
                 self._recovery_required = False
 
             self._state_revision += 1
+            if self._desired_face is not None:
+                want_face, sent_at, retries = self._desired_face
+                if parsed["face"] == want_face:
+                    self._desired_face = None
+                elif (received_at - sent_at) < 3.0 and retries < 1:
+                    self._desired_face = (want_face, sent_at, retries + 1)
+                    self._request_status_poll_locked()
+                else:
+                    self._desired_face = None
             snap = self.snapshot()
             return SessionEvent(
                 kind="state",
@@ -983,9 +1006,12 @@ class DeviceSession:
                 {"cmd": CMD_DONE, "seq": seq, "action": action},
             )
         self._pending.pop(seq, None)
+        if self._action == action:
+            self._action = 0
         if slot.uncertain:
             self._recovery_required = False
         self._state_revision += 1
+        self._request_status_poll_locked()
         return SessionEvent(
             "done",
             self._session_id,
@@ -1134,6 +1160,7 @@ class DeviceSession:
         self._voltage = None
         self._action = None
         self._face = None
+        self._desired_face = None
         self._music_state = None
         self._track = None
         self._volume = None
@@ -1174,6 +1201,7 @@ class DeviceSession:
     def _enter_fault(self, reason: str) -> None:
         with self._mu:
             self._cancel_poll_timer_locked()
+            self._desired_face = None
             if not self._faulted:
                 self._faulted = True
                 self._fault_reason = reason

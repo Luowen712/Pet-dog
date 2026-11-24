@@ -271,4 +271,47 @@ describe('pet store 重连对账、unknown 保留与关闭码', () => {
     expect(deviceStore.devices[0].online).toBe(false)
     expect(deviceStore.devices[0].control_state).toBe('offline')
   })
+
+  it('done 回执立即清当前动作，新 session_id 在原 WS 上直接同步不断线', async () => {
+    const { usePetStore } = await import('@/stores/pet')
+    const pet = usePetStore()
+    getDeviceStatusMock.mockResolvedValueOnce(baseStatus({ session_id: 'sid-1', state_revision: 5, action: 0 }))
+    getCommandMock.mockResolvedValue(null)
+
+    pet.connect(1)
+    const sock = sockets[0]
+    sock.options.onStatus('open')
+    await vi.waitFor(() => expect(pet.controlState).toBe('ready'))
+
+    sendCommandMock.mockImplementationOnce(async (_dev: number, action: number, cmdId: string) =>
+      receiptOf({ cmd_id: cmdId, action, status: 'pending', transport: 'ok', revision: 1 }),
+    )
+    await pet.sendAction(49)
+    const [cmdId] = Object.keys(pet.pending)
+    sock.options.onEvent({ event: 'state', data: baseStatus({ session_id: 'sid-1', state_revision: 6, control_state: 'busy', action: 49 }) })
+    expect(pet.action).toBe(49)
+
+    sock.options.onEvent({
+      event: 'command',
+      data: receiptOf({ cmd_id: cmdId, action: 49, status: 'done', transport: 'ok', revision: 2 }),
+    })
+    expect(pet.action).toBe(0)
+
+    // 会话切换时应直接用当前已打开 WS 拉快照，不再调用 resync 断线等退避
+    getDeviceStatusMock.mockResolvedValueOnce(baseStatus({ session_id: 'sid-2', state_revision: 1, face: 4 }))
+    sock.options.onEvent({
+      event: 'link',
+      data: {
+        device_id: 1,
+        online: true,
+        control_state: 'ready',
+        reason: null,
+        session_id: 'sid-2',
+        state_revision: 1,
+      },
+    })
+    await vi.waitFor(() => expect(pet.face).toBe(4))
+    expect(sock.resync).not.toHaveBeenCalled()
+    expect(getDeviceStatusMock).toHaveBeenCalledTimes(2)
+  })
 })

@@ -2,6 +2,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import logging
+import threading
 
 from fastapi import HTTPException
 from app.db import SessionLocal
@@ -50,10 +51,22 @@ class ReceiptWriter:
     def __init__(self, events):
         self.events = events
         self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='command-db')
+        self._mu = threading.Lock()
+        self._latest_stage: dict[tuple[str, str], int] = {}
+
+    def _bump_stage(self, sid, cmd_id, stage):
+        k = (sid, cmd_id)
+        with self._mu:
+            if stage > self._latest_stage.get(k, 0):
+                self._latest_stage[k] = stage
 
     def on_event(self, session, event):
         data = event.payload.copy()
         if event.kind in ('accepted', 'done', 'rejected', 'unknown'):
+            if event.kind == 'accepted':
+                self._bump_stage(event.session_id, data['cmd_id'], 2)
+            elif event.kind in ('done', 'rejected'):
+                self._bump_stage(event.session_id, data['cmd_id'], 3)
             self.pool.submit(self._update, session, event.session_id, data, event.kind, None)
         elif event.kind in ('state', 'link', 'fault'):
             snap = session.snapshot()
@@ -75,15 +88,28 @@ class ReceiptWriter:
                                 control_state=snap.control_state, reason=reason))
 
     def on_write(self, session, sid, cmd_id, uid, outcome):
+        if outcome.transport == 0:
+            self._bump_stage(sid, cmd_id, 1)
         self.pool.submit(self._update, session, sid, dict(cmd_id=cmd_id, actor_user_id=uid), 'write', outcome)
 
     def _update(self, session, sid, data, kind, outcome):
+        k = (sid, data['cmd_id'])
+        with self._mu:
+            latest = self._latest_stage.get(k, 0)
+        # Superseded by a queued accepted/done/rejected commit which already sets transport=0.
+        if kind == 'write' and outcome.transport == 0 and latest > 1:
+            return
+        if kind == 'accepted' and latest > 2:
+            return
         try:
             with SessionLocal.begin() as db:
                 match = {'actor_user_id': data['actor_user_id']} if kind == 'write' else {'seq': data['seq']}
                 row = db.query(CommandLog).filter_by(device_pk=session.device_pk, session_id=sid,
                         msg_id=data['cmd_id'], **match).with_for_update().one_or_none()
                 if not row or row.status in (30, 40, 60):
+                    if row and row.status in (30, 40, 60):
+                        with self._mu:
+                            self._latest_stage.pop(k, None)
                     return
                 if kind == 'write':
                     if row.transport == 0 or row.transport == outcome.transport:
@@ -109,8 +135,12 @@ class ReceiptWriter:
                     row.finished_at = row.updated_at
                 row.revision += 1
                 pk, be, result = row.device_pk, row.be, receipt(row)
+            if kind in ('done', 'rejected'):
+                with self._mu:
+                    self._latest_stage.pop(k, None)
             self.events.publish(pk, be, 'command', result)
-            self.publish_link(session, sid, be, result['reason'])
+            if kind != 'accepted' and not (kind == 'write' and outcome.transport == 0):
+                self.publish_link(session, sid, be, result['reason'])
         except Exception:
             session.fail_closed('receipt_commit_failed')
             logger.exception('Receipt not persisted; no retry: cmd_id=%s session=%s seq=%s kind=%s', data['cmd_id'], sid, data.get('seq'), kind)

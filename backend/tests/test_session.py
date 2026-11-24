@@ -1421,3 +1421,57 @@ def test_lock_drop_during_send_gate_wait_and_unbind_during_seq_persist():
         assert sess.control_state == "handover_required"
     finally:
         sess.close()
+
+
+def test_done_clears_busy_action_immediately_and_stale_face_retries_poll():
+    db = SessionLocal()
+    try:
+        d = _mk_device(db, "FASTSYNC")
+        dev_id = d.id
+    finally:
+        db.close()
+
+    clock = FakeClock()
+    port = _RecordingPort()
+    link = SerialLink(port, clock=clock, min_frame_gap=0.0, poll_interval=0.002)
+    sess = DeviceSession(
+        dev_id,
+        SessionLocal,
+        link,
+        clock=clock,
+        auto_prepare_sim=True,
+    )
+    sess.start()
+    try:
+        # 1. 上线并下发动作 0x31；执行中途 0x03 上报 action=0x31
+        port.inject_rx(build(CMD_STATUS, DEFAULT_STATUS))
+        assert _wait_until(lambda: sess.control_state == "ready")
+        seq = sess.send_motion(str(uuid.uuid4()), 0x31)
+        assert _wait_until(lambda: len(port.written) == 1)
+        running = bytearray(DEFAULT_STATUS)
+        running[1] = 0x31
+        port.inject_rx(build(CMD_STATUS, bytes(running)))
+        assert _wait_until(lambda: sess.snapshot().action == 0x31)
+        assert sess.control_state == "busy"
+
+        # 收到 0x02 DONE 后应立即清 action 并回到 ready，不必苦等下一次 5s 0x03，同时催一次 0x06
+        clock.advance(1.5)
+        port.inject_rx(build(CMD_DONE, bytes([0x31, seq])))
+        assert _wait_until(lambda: sess.control_state == "ready")
+        assert sess.snapshot().action == 0
+        assert _wait_until(lambda: build(CMD_POLL_STATUS) in port.written)
+
+        # 2. 下发表情 4 后若抢先收到旧表情 0x03，冷却过后应补发一次 0x06 拉齐新表情
+        clock.advance(1.5)
+        polls_before = port.written.count(build(CMD_POLL_STATUS))
+        sess.send_face(4)
+        assert _wait_until(lambda: port.written.count(build(CMD_POLL_STATUS)) == polls_before + 1)
+        clock.advance(1.5)
+        port.inject_rx(build(CMD_STATUS, DEFAULT_STATUS))  # 仍报旧表情 face=2
+        assert _wait_until(lambda: port.written.count(build(CMD_POLL_STATUS)) == polls_before + 2)
+        updated = bytearray(DEFAULT_STATUS)
+        updated[2] = 4
+        port.inject_rx(build(CMD_STATUS, bytes(updated)))
+        assert _wait_until(lambda: sess.snapshot().face == 4)
+    finally:
+        sess.close()

@@ -71,10 +71,15 @@ class SendGate:
         self._listeners_mu = threading.Lock()
         self._listeners: list[RevokeListener] = []
         self._default_timeout = default_timeout
+        self._hold_seq = 0
 
     @property
     def default_timeout(self) -> float:
         return self._default_timeout
+
+    @property
+    def hold_seq(self) -> int:
+        return self._hold_seq
 
     @contextmanager
     def hold(self, timeout: float | None = None) -> Iterator[None]:
@@ -84,6 +89,7 @@ class SendGate:
         if not acquired:
             raise SendGateTimeout(f"等待 SendGate 超时（{wait:.2f}s）")
         try:
+            self._hold_seq += 1
             yield
         finally:
             self._lock.release()

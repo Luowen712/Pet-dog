@@ -269,6 +269,7 @@ export const usePetStore = defineStore('pet', () => {
       case 'done':
         terminalCmds.add(receipt.cmd_id)
         if (latest) hold(item.action, 'ok', OK_HOLD_MS)
+        if (action.value === item.action) action.value = 0
         dropPending(receipt.cmd_id)
         break
       case 'rejected':
@@ -387,7 +388,8 @@ export const usePetStore = defineStore('pet', () => {
           else buffer.push(event)
         } else if ((event.event === 'state' || event.event === 'link') &&
                    event.data.session_id && event.data.session_id !== lastSessionId) {
-          socket?.resync()
+          buffer = [event]
+          void synchronize(deviceId, gen, ++syncAttempt)
         } else onEvent(event)
       },
       onStatus: (value) => {

@@ -18,6 +18,8 @@ class Connection:
     close_code: int | None = None
 
     def close(self, code):
+        if self.close_code == 4401:
+            return
         self.close_code = code
         self.queue.clear()
         self.wake.set()
@@ -28,6 +30,19 @@ class Events:
         self.loop = loop
         self.tickets = {}
         self.sockets = set()
+        # ponytail: single-process in-memory revocation watermarks (06:144, 06:204);
+        # switch to shared pubsub/DB polling if multi-process is ever introduced.
+        self.min_tv: dict[int, int] = {}
+        self.min_be: dict[int, int] = {}
+
+    def _revoked_code(self, ctx):
+        tv = self.min_tv.get(ctx.uid)
+        if tv is not None and ctx.tv < tv:
+            return 4401
+        be = self.min_be.get(ctx.device_pk)
+        if be is not None and ctx.be < be:
+            return 1008
+        return None
 
     def issue(self, ctx):
         now = time.monotonic()
@@ -62,6 +77,10 @@ class Events:
                 return 1008
             return None
         def invalidate():
+            if event.uid is not None and event.new_tv is not None:
+                self.min_tv[event.uid] = max(self.min_tv.get(event.uid, -1), event.new_tv)
+            if event.device_pk is not None and event.new_be is not None:
+                self.min_be[event.device_pk] = max(self.min_be.get(event.device_pk, -1), event.new_be)
             self.tickets = {k: v for k, v in self.tickets.items() if not code(v[0])}
             for c in self.sockets:
                 if reason := code(c.ctx):
@@ -99,16 +118,20 @@ class Events:
             await ws.accept()  # slot already registered; no event gap after the client sees open
             reader = asyncio.create_task(receive_disconnect())
             while not c.close_code:
+                is_ping = False
                 if not c.queue:
                     c.wake.clear()
                     try:
                         await asyncio.wait_for(c.wake.wait(), 30)
                         continue
                     except asyncio.TimeoutError:
+                        is_ping = True
                         msg = {'event': 'ping', 'data': {'server_time': iso(utcnow())}}
                 else:
                     msg = c.queue.popleft()
-                reason = await asyncio.to_thread(invalid_code, ctx)
+                reason = self._revoked_code(ctx)
+                if not reason and is_ping:
+                    reason = await asyncio.to_thread(invalid_code, ctx)
                 if reason or c.close_code:
                     c.close(reason or c.close_code)
                     break

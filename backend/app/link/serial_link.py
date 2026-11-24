@@ -189,6 +189,9 @@ class SerialLink:
         self._fault_reason: str | None = None
         self._thread: threading.Thread | None = None
         self._next_write_allowed_at: float = 0.0
+        set_rx = getattr(self._port, "set_rx_callback", None)
+        if callable(set_rx):
+            set_rx(self._wakeup.set)
 
     @property
     def is_running(self) -> bool:
@@ -357,13 +360,32 @@ class SerialLink:
             )
             return
 
-        # 2. 保守物理帧间隔（06:210：至少 20ms + 字节线上传输耗时）
+        # 2. 保守物理帧间隔（06:210：至少 20ms + 字节线上传输耗时）；等待期间继续收帧避免阻挡回包
         if self._min_frame_gap > 0 and now < self._next_write_allowed_at:
-            remain = self._next_write_allowed_at - now
-            if self._stop_event.wait(timeout=remain):
+            while not self._stop_event.is_set() and not self._faulted:
+                self._poll_read()
+                if self._faulted or self._stop_event.is_set():
+                    self._notify_write(
+                        item,
+                        WriteOutcome(
+                            transport=TRANSPORT_WRITE_FAILED,
+                            reason=self._fault_reason or "link_closing",
+                        ),
+                    )
+                    return
+                now = self._clock.monotonic()
+                remain = self._next_write_allowed_at - now
+                if remain <= 0:
+                    break
+                self._wakeup.clear()
+                self._wakeup.wait(timeout=min(remain, self._poll_interval))
+            if self._stop_event.is_set() or self._faulted:
                 self._notify_write(
                     item,
-                    WriteOutcome(transport=TRANSPORT_WRITE_FAILED, reason="link_closing"),
+                    WriteOutcome(
+                        transport=TRANSPORT_WRITE_FAILED,
+                        reason=self._fault_reason or "link_closing",
+                    ),
                 )
                 return
             # 等完帧间隔后再次核对排队是否已过期

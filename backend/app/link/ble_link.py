@@ -230,6 +230,7 @@ class BleBytePort:
         self._client_factory = client_factory
 
         self._rx = bytearray()
+        self._rx_callback: Callable[[], None] | None = None
         self._mu = threading.Lock()
         self._open = False
         self._disconnected = False
@@ -283,11 +284,18 @@ class BleBytePort:
             self._disconnected = True
         logger.warning("BLE 设备已断开：%s", self.address)
 
+    def set_rx_callback(self, callback: Callable[[], None] | None) -> None:
+        with self._mu:
+            self._rx_callback = callback
+
     def _on_notify(self, _sender: Any, data: bytearray | bytes) -> None:
         if not data:
             return
         with self._mu:
             self._rx.extend(data)
+            cb = self._rx_callback
+        if cb is not None:
+            cb()
 
     async def _safe_disconnect(self, client: Any) -> None:
         if client is None:
@@ -489,6 +497,7 @@ class BleBytePort:
     def close(self) -> None:
         with self._mu:
             self._open = False
+            self._rx_callback = None
         if self._loop.is_running():
             try:
                 self._submit(self._async_close(), timeout=5.0)
